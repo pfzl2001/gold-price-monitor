@@ -33,21 +33,25 @@ from monitor import fetch_gold_price, GoldPriceResult, _now_in_timezone, DEFAULT
 
 # ================= 全局个性化设置 =================
 # 您的实际黄金持仓成本价（元/克），支持浮点数（如 558.5）。如果未买入，请设置为 None 或 0.0
-CZB_GOLD_COST = None
+GOLD_COST = None
 
 # 是否启用邮件通知。如果设为 False，系统将完全不会发送任何提醒邮件
 ENABLE_EMAIL_NOTIFICATION = True
 # ==================================================
 
 
-def send_resend_email(subject: str, html_content: str, receiver_email: str = "1697669486@qq.com") -> bool:
+def send_resend_email(subject: str, html_content: str, receiver_email: str = "") -> bool:
     """通用邮件发送函数（Resend SMTP）"""
     # 1. 邮件配置，优先使用环境变量，其次使用硬编码默认值
     smtp_host = os.getenv("SMTP_HOST", "smtp.resend.com").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "465").strip())
     smtp_user = os.getenv("SMTP_USER", "resend").strip()
-    smtp_pass = os.getenv("SMTP_PASS", "re_eGN8AvLy_CrG71aGKzfZfChNenTZwiprF").strip()
-    sender_email = os.getenv("SENDER_EMAIL", "noreply@mail.602020.xyz").strip()
+    smtp_pass = os.getenv("SMTP_PASS", "").strip()
+    sender_email = os.getenv("SENDER_EMAIL", "").strip()
+
+    if not smtp_pass or not sender_email or not receiver_email:
+        print("[warn] 邮件配置不完整（SMTP_PASS/SENDER_EMAIL/receiver 缺失），跳过发送")
+        return False
     
     # 2. 构建邮件内容
     msg = MIMEMultipart('alternative')
@@ -174,9 +178,9 @@ class BuyStrategyConfig:
                 print(f"[warn] 加载配置失败: {e}, 使用默认配置")
         
         # 始终从文件头部的全局配置变量读取实际持仓成本
-        global CZB_GOLD_COST
-        if CZB_GOLD_COST is not None and CZB_GOLD_COST > 0:
-            config.actual_cost = float(CZB_GOLD_COST)
+        global GOLD_COST
+        if GOLD_COST is not None and GOLD_COST > 0:
+            config.actual_cost = float(GOLD_COST)
             print(f"[info] 已成功从文件头部全局变量加载实际持仓成本: {config.actual_cost} 元/克")
         else:
             config.actual_cost = None
@@ -212,7 +216,7 @@ def load_price_history(log_path: Path = LOG_FILE_PATH) -> List[PriceRecord]:
     if not log_path.exists():
         return records
 
-    max_lines = int(os.getenv("CZB_HISTORY_MAX_LINES", "5000").strip() or "5000")
+    max_lines = int(os.getenv("HISTORY_MAX_LINES", "5000").strip() or "5000")
     with log_path.open("r", encoding="utf-8") as f:
         lines = deque(f, maxlen=max_lines)
 
@@ -480,8 +484,8 @@ class BuyStrategyAnalyzer:
                 )
             )
 
-        freq_minutes = int(os.getenv("CZB_RESAMPLE_MINUTES", "8").strip() or "8")
-        max_steps = int(os.getenv("CZB_RESAMPLE_MAX_STEPS", "5000").strip() or "5000")
+        freq_minutes = int(os.getenv("RESAMPLE_MINUTES", "8").strip() or "8")
+        max_steps = int(os.getenv("RESAMPLE_MAX_STEPS", "5000").strip() or "5000")
         return resample_prices_ffill(records, freq_minutes=freq_minutes, max_steps=max_steps)
 
     def strategy_price_threshold(self) -> StrategyResult:
@@ -606,7 +610,7 @@ class BuyStrategyAnalyzer:
         """分时均线策略（基于固定分钟重采样数据）"""
         prices = self.get_prices_list()
         periods = self.config.intraday_ma_periods
-        freq_minutes = int(os.getenv("CZB_RESAMPLE_MINUTES", "15").strip() or "15")
+        freq_minutes = int(os.getenv("RESAMPLE_MINUTES", "15").strip() or "15")
 
         if not self.current or len(prices) < min(periods):
             return StrategyResult(
@@ -1070,7 +1074,7 @@ class BuyStrategyAnalyzer:
         if not self._should_notify_actual_cost(analysis):
             return False
 
-        email_to = os.getenv("EMAIL_TO", "1697669486@qq.com").strip()
+        email_to = os.getenv("EMAIL_TO", "").strip()
 
         if not email_to:
             print("[warn] EMAIL_TO 为空，跳过发送")
@@ -1243,7 +1247,7 @@ class BuyStrategyAnalyzer:
             print(f"  持仓浮动盈亏: {ac_res['diff_pct']:+.2f}%")
             print(f"  策略状态信号: {ac_res['signal']} ({ac_res['reason']})")
         else:
-            print("  状态: ⚪ 未配置实际成本价 (可设置代码头部全局变量 CZB_GOLD_COST 启用)")
+            print("  状态: ⚪ 未配置实际成本价 (可设置代码头部全局变量 GOLD_COST 启用)")
 
         print("\n" + "=" * 60)
 
@@ -1401,7 +1405,7 @@ class BuyStrategyAnalyzer:
             # 具体跳过原因已在 _should_notify_in_day 中打印
             return False
 
-        email_to = os.getenv("EMAIL_TO", "1697669486@qq.com").strip()
+        email_to = os.getenv("EMAIL_TO", "").strip()
         email_subject = os.getenv("EMAIL_SUBJECT", "🔔 金价买入提醒").strip()
 
         if not email_to:
@@ -1576,7 +1580,7 @@ class BuyStrategyAnalyzer:
         info = run_result.get("info", {})
         current_price = info.get("price", 0.0)
         
-        email_to = os.getenv("EMAIL_TO", "1697669486@qq.com").strip()
+        email_to = os.getenv("EMAIL_TO", "").strip()
         
         if not email_to:
             print("[warn] EMAIL_TO 为空，跳过发送")

@@ -1,4 +1,4 @@
-name: czb-gold-price-monitor
+name: gold-price-monitor
 
 on:
   # 外部触发器（主要调度方式，通过 cron-job.org 调用）
@@ -11,7 +11,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: czb-gold-price-monitor-${{ github.ref }}
+  group: gold-price-monitor-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,17 +34,20 @@ jobs:
 
       - name: Run monitor (one-shot)
         env:
-          CZB_TZ: "Asia/Shanghai"
-          CZB_GOLD_CODE: "CZB-JCJ"
-          CZB_TRUST_ENV: "0"
-          # 不再配置邮件，monitor.py 只负责获取和记录价格
+          GOLD_TZ: "Asia/Shanghai"
+          GOLD_CODE: "CZB-JCJ"
+          TRUST_ENV: "0"
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python monitor.py
 
       - name: Run buy strategy analysis
         env:
-          CZB_TZ: "Asia/Shanghai"
-          # 邮件配置，只有策略建议买入时才发邮件
-          EMAIL_TO: "1697669486@qq.com"
+          GOLD_TZ: "Asia/Shanghai"
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_SUBJECT: "🔔 金价买入提醒"
           # 防刷屏通知策略参数
           NOTIFY_COOLDOWN_HOURS: "4"    # 两次通知之间最少间隔（小时）

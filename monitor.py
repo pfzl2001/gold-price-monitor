@@ -41,8 +41,12 @@ def send_resend_email(subject: str, html_content: str, receiver_email: str) -> b
     smtp_host = os.getenv("SMTP_HOST", "smtp.resend.com").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "465").strip())
     smtp_user = os.getenv("SMTP_USER", "resend").strip()
-    smtp_pass = os.getenv("SMTP_PASS", "re_eGN8AvLy_CrG71aGKzfZfChNenTZwiprF").strip()
-    sender_email = os.getenv("SENDER_EMAIL", "noreply@mail.602020.xyz").strip()
+    smtp_pass = os.getenv("SMTP_PASS", "").strip()
+    sender_email = os.getenv("SENDER_EMAIL", "").strip()
+
+    if not smtp_pass or not sender_email or not receiver_email:
+        print("[warn] 邮件配置不完整（SMTP_PASS/SENDER_EMAIL/receiver 缺失），跳过发送")
+        return False
     
     msg = MIMEMultipart('alternative')
     msg['Subject'] = Header(subject, 'utf-8')
@@ -132,7 +136,7 @@ def _build_session() -> requests.Session:
     # On some machines, HTTPS_PROXY/HTTP_PROXY is set (e.g. to 127.0.0.1:7890).
     # That breaks both local runs (if the proxy isn't running) and GitHub Actions.
     # Default to ignoring env proxy settings unless explicitly enabled.
-    session.trust_env = _env_bool("CZB_TRUST_ENV", False)
+    session.trust_env = _env_bool("TRUST_ENV", False)
     retry = Retry(
         total=3,
         connect=3,
@@ -248,10 +252,10 @@ def _send_target_price_email_if_needed(result: GoldPriceResult) -> bool:
     if not (result.last_price > target_f):
         return False
 
-    email_to = os.getenv("EMAIL_TO", "1697669486@qq.com").strip()
+    email_to = os.getenv("EMAIL_TO", "").strip()
     email_subject = os.getenv(
-        "EMAIL_SUBJECT", "CZB 金价超过目标价提醒"
-    ).strip() or "CZB 金价超过目标价提醒"
+        "EMAIL_SUBJECT", "金价超过目标价提醒"
+    ).strip() or "金价超过目标价提醒"
 
     if not email_to:
         print("[warn] 超过目标价但邮件配置缺失，跳过发送")
@@ -267,9 +271,9 @@ def _send_email_if_needed(result: GoldPriceResult) -> bool:
     if result.raise_percent >= 0:
         return False
 
-    email_to = os.getenv("EMAIL_TO", "1697669486@qq.com").strip()
+    email_to = os.getenv("EMAIL_TO", "").strip()
     email_subject = os.getenv(
-        "EMAIL_SUBJECT", "CZB 金价下跌提醒").strip() or "CZB 金价下跌提醒"
+        "EMAIL_SUBJECT", "金价下跌提醒").strip() or "金价下跌提醒"
 
     if not email_to:
         print("[warn] raisePercent<0 但邮件配置缺失，跳过发送")
@@ -281,13 +285,13 @@ def _send_email_if_needed(result: GoldPriceResult) -> bool:
 
 
 def main() -> int:
-    tz_name = os.getenv("CZB_TZ", DEFAULT_TZ)
+    tz_name = os.getenv("GOLD_TZ", DEFAULT_TZ)
     # Schedule check removed - GitHub Actions cron handles timing precisely
     # to save Actions quota. Runs only on Beijing workdays 9:00-23:00.
 
     gold_code = os.getenv(
-        "CZB_GOLD_CODE", DEFAULT_GOLD_CODE).strip() or DEFAULT_GOLD_CODE
-    timeout_seconds = _env_int("CZB_TIMEOUT_SECONDS", 15)
+        "GOLD_CODE", DEFAULT_GOLD_CODE).strip() or DEFAULT_GOLD_CODE
+    timeout_seconds = _env_int("TIMEOUT_SECONDS", 15)
 
     try:
         result = fetch_gold_price(
@@ -299,7 +303,7 @@ def main() -> int:
         _append_log_line(msg)
 
         # Optional: notify failures (off by default)
-        if _env_bool("CZB_EMAIL_ON_ERROR", False):
+        if _env_bool("EMAIL_ON_ERROR", False):
             try:
                 dummy = GoldPriceResult(
                     gold_code=gold_code,

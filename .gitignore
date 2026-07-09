@@ -1,0 +1,22 @@
+# Logs (may contain runtime sensitive data)
+monitor.log
+buy_strategy.log
+
+# Notification state
+buy_notify_state.json
+
+# Strategy config (may contain personal thresholds)
+strategy_config.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
