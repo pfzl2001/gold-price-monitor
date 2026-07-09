@@ -320,10 +320,8 @@ def main() -> int:
         return 1
 
     now = _now_in_timezone(tz_name)
-    slot_15m = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
     log_payload = {
         "timestamp": now.isoformat(sep=" ", timespec="seconds"),
-        "slot_15m": slot_15m.isoformat(sep=" ", timespec="seconds"),
         "goldCode": result.gold_code,
         "name": result.name,
         "lastPrice": result.last_price,
@@ -331,14 +329,6 @@ def main() -> int:
         "raisePercent": result.raise_percent,
         "tradeDateTime": result.trade_datetime,
     }
-    if os.getenv("GITHUB_ACTIONS", "").strip().lower() == "true":
-        log_payload["source"] = "github_actions"
-        log_payload["github_event_name"] = os.getenv("GITHUB_EVENT_NAME", "")
-        log_payload["github_run_id"] = os.getenv("GITHUB_RUN_ID", "")
-        log_payload["github_run_number"] = os.getenv("GITHUB_RUN_NUMBER", "")
-        log_payload["github_run_attempt"] = os.getenv("GITHUB_RUN_ATTEMPT", "")
-        log_payload["github_workflow"] = os.getenv("GITHUB_WORKFLOW", "")
-        log_payload["github_actor"] = os.getenv("GITHUB_ACTOR", "")
     log_line = json.dumps(log_payload, ensure_ascii=False) + "\n"
     print(log_line.strip())
     _append_log_line(log_line)
