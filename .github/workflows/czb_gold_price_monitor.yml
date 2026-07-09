@@ -1,0 +1,81 @@
+name: czb-gold-price-monitor
+
+on:
+  # 外部触发器（主要调度方式，通过 cron-job.org 调用）
+  repository_dispatch:
+    types: [trigger-monitor]
+  schedule:
+    # 备份：每小时运行一次，北京时间工作日 9:00-23:00
+    # 仅在外部触发失效时作为兜底
+    - cron: "0 1-15 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: czb-gold-price-monitor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # 需要写权限来 commit log
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run monitor (one-shot)
+        env:
+          CZB_TZ: "Asia/Shanghai"
+          CZB_GOLD_CODE: "CZB-JCJ"
+          CZB_TRUST_ENV: "0"
+          # 不再配置邮件，monitor.py 只负责获取和记录价格
+        run: python monitor.py
+
+      - name: Run buy strategy analysis
+        env:
+          CZB_TZ: "Asia/Shanghai"
+          # 邮件配置，只有策略建议买入时才发邮件
+          EMAIL_TO: "1697669486@qq.com"
+          EMAIL_SUBJECT: "🔔 金价买入提醒"
+          # 防刷屏通知策略参数
+          NOTIFY_COOLDOWN_HOURS: "4"    # 两次通知之间最少间隔（小时）
+          NOTIFY_DROP_PCT: "0.5"        # 价格需比上次通知价低多少%才再次通知
+          NOTIFY_DAILY_MAX: "3"         # 每天最多通知次数
+        run: python buy_strategy.py > buy_strategy.log 2>&1 || true
+
+      - name: Show latest price query
+        if: always()
+        run: |
+          echo "📊 最新查询结果:"
+          tail -n 1 monitor.log || echo "暂无记录"
+          echo ""
+          echo "🎯 买入策略分析结果:"
+          cat buy_strategy.log || echo "暂无 buy_strategy 输出"
+
+      - name: Commit and push log
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add monitor.log buy_strategy.log
+          if [ -f buy_notify_state.json ]; then
+            git add buy_notify_state.json
+          fi
+          git diff --staged --quiet || git commit -m "📊 Update gold price log [skip ci]"
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash || true
+            if git push; then
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "Push failed after retries"
