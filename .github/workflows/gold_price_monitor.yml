@@ -50,7 +50,6 @@ jobs:
           # 防刷屏通知策略参数
           NOTIFY_COOLDOWN_HOURS: "4"    # 两次通知之间最少间隔（小时）
           NOTIFY_DROP_PCT: "0.5"        # 价格需比上次通知价低多少%才再次通知
-          NOTIFY_DAILY_MAX: "3"         # 每天最多通知次数
         run: python buy_strategy.py > buy_strategy.log 2>&1 || true
 
       - name: Show latest price query

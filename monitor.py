@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +15,6 @@ from urllib3.util.retry import Retry
 GOLD_PRICE_URL = "https://api.jdjygold.com/gw2/generic/produTools/h5/m/getGoldPrice"
 DEFAULT_GOLD_CODE = "CZB-JCJ"
 DEFAULT_TZ = "Asia/Shanghai"
-DEFAULT_START_HOUR = 9
-DEFAULT_END_HOUR = 24
 
 DEFAULT_HEADERS: Dict[str, str] = {
     "accept": "application/json, text/plain, */*",
@@ -28,9 +24,6 @@ DEFAULT_HEADERS: Dict[str, str] = {
 }
 
 LOG_FILE_PATH = Path(__file__).with_name("monitor.log")
-
-
-
 
 
 @dataclass(frozen=True)
@@ -60,13 +53,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "y", "on"}
-
-
 def _now_in_timezone(tz_name: str) -> datetime:
     # Python 3.11 has zoneinfo in stdlib.
     from zoneinfo import ZoneInfo
@@ -74,33 +60,12 @@ def _now_in_timezone(tz_name: str) -> datetime:
     return datetime.now(ZoneInfo(tz_name))
 
 
-def should_run_now(
-    *,
-    tz_name: str = DEFAULT_TZ,
-    weekdays_only: bool = True,
-    start_hour: int = DEFAULT_START_HOUR,
-    end_hour: int = DEFAULT_END_HOUR,
-    now: Optional[datetime] = None,
-) -> bool:
-    if now is None:
-        now = _now_in_timezone(tz_name)
-
-    if weekdays_only and now.weekday() >= 5:
-        return False
-
-    if end_hour <= start_hour:
-        return False
-
-    # [start_hour, end_hour) in local time. With end_hour=24, this means 9..23.
-    return start_hour <= now.hour < end_hour
-
-
 def _build_session() -> requests.Session:
     session = requests.Session()
     # On some machines, HTTPS_PROXY/HTTP_PROXY is set (e.g. to 127.0.0.1:7890).
     # That breaks both local runs (if the proxy isn't running) and GitHub Actions.
     # Default to ignoring env proxy settings unless explicitly enabled.
-    session.trust_env = _env_bool("TRUST_ENV", False)
+    session.trust_env = os.getenv("TRUST_ENV", "").strip().lower() in {"1", "true", "yes"}
     retry = Retry(
         total=3,
         connect=3,
@@ -175,9 +140,6 @@ def _append_log_line(text: str) -> None:
     LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOG_FILE_PATH.open("a", encoding="utf-8") as handle:
         handle.write(text)
-
-
-
 
 
 def main() -> int:

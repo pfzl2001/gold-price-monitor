@@ -2,8 +2,6 @@
 monitor.log
 buy_strategy.log
 
-# Notification state
-buy_notify_state.json
 
 # Strategy config (may contain personal thresholds)
 strategy_config.json
