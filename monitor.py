@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-TARGET_PRICE_NOTIFY: float | None = 1135
-
 import json
 import os
 import sys
@@ -12,10 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.header import Header
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -36,37 +30,7 @@ DEFAULT_HEADERS: Dict[str, str] = {
 LOG_FILE_PATH = Path(__file__).with_name("monitor.log")
 
 
-def send_resend_email(subject: str, html_content: str, receiver_email: str) -> bool:
-    """通用邮件发送函数（Resend SMTP）"""
-    smtp_host = os.getenv("SMTP_HOST", "smtp.resend.com").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "465").strip())
-    smtp_user = os.getenv("SMTP_USER", "resend").strip()
-    smtp_pass = os.getenv("SMTP_PASS", "").strip()
-    sender_email = os.getenv("SENDER_EMAIL", "").strip()
 
-    if not smtp_pass or not sender_email or not receiver_email:
-        print("[warn] 邮件配置不完整（SMTP_PASS/SENDER_EMAIL/receiver 缺失），跳过发送")
-        return False
-    
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = Header(subject, 'utf-8')
-    msg['From'] = f"金价监控助手 <{sender_email}>"
-    msg['To'] = receiver_email
-    
-    subtype = 'html' if '<html>' in html_content or '<body' in html_content or '<br' in html_content else 'plain'
-    msg.attach(MIMEText(html_content, subtype, 'utf-8'))
-    
-    recipients = [addr.strip() for addr in receiver_email.split(",") if addr.strip()]
-    
-    try:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(sender_email, recipients, msg.as_string())
-        print(f"[alert] 📧 Resend 邮件已发送到: {', '.join(recipients)}")
-        return True
-    except Exception as e:
-        print(f"[error] Resend 邮件发送失败: {e}")
-        return False
 
 
 @dataclass(frozen=True)
@@ -213,75 +177,7 @@ def _append_log_line(text: str) -> None:
         handle.write(text)
 
 
-def _format_email_body(result: GoldPriceResult) -> str:
-    lines = [
-        "京东金价监控提醒：raisePercent < 0",
-        f"时间(北京时间): {_now_in_timezone(DEFAULT_TZ).isoformat(sep=' ', timespec='seconds')}",
-        result.summary_line(),
-        "",
-        "原始返回(JSON 截断):",
-        json.dumps(result.raw, ensure_ascii=False)[:3000],
-    ]
-    return "\n".join(lines)
 
-
-def _format_target_price_email_body(result: GoldPriceResult, target_price: float) -> str:
-    lines = [
-        "京东金价监控提醒：lastPrice > TARGET_PRICE_NOTIFY",
-        f"时间(北京时间): {_now_in_timezone(DEFAULT_TZ).isoformat(sep=' ', timespec='seconds')}",
-        f"targetPrice={target_price} lastPrice={result.last_price} tradeDateTime={result.trade_datetime}",
-        "",
-        result.summary_line(),
-        "",
-        "原始返回(JSON 截断):",
-        json.dumps(result.raw, ensure_ascii=False)[:3000],
-    ]
-    return "\n".join(lines)
-
-
-def _send_target_price_email_if_needed(result: GoldPriceResult) -> bool:
-    target = TARGET_PRICE_NOTIFY
-    if target is None:
-        return False
-
-    try:
-        target_f = float(target)
-    except Exception:
-        return False
-
-    if not (result.last_price > target_f):
-        return False
-
-    email_to = os.getenv("EMAIL_TO", "").strip()
-    email_subject = os.getenv(
-        "EMAIL_SUBJECT", "金价超过目标价提醒"
-    ).strip() or "金价超过目标价提醒"
-
-    if not email_to:
-        print("[warn] 超过目标价但邮件配置缺失，跳过发送")
-        return False
-
-    subject = f"{email_subject} - 当前 {result.last_price:.2f} > 目标 {target_f:.2f}"
-    body = _format_target_price_email_body(result, target_f)
-
-    return send_resend_email(subject, body, email_to)
-
-
-def _send_email_if_needed(result: GoldPriceResult) -> bool:
-    if result.raise_percent >= 0:
-        return False
-
-    email_to = os.getenv("EMAIL_TO", "").strip()
-    email_subject = os.getenv(
-        "EMAIL_SUBJECT", "金价下跌提醒").strip() or "金价下跌提醒"
-
-    if not email_to:
-        print("[warn] raisePercent<0 但邮件配置缺失，跳过发送")
-        return False
-
-    body = _format_email_body(result)
-
-    return send_resend_email(email_subject, body, email_to)
 
 
 def main() -> int:
@@ -302,21 +198,6 @@ def main() -> int:
         print(msg.strip())
         _append_log_line(msg)
 
-        # Optional: notify failures (off by default)
-        if _env_bool("EMAIL_ON_ERROR", False):
-            try:
-                dummy = GoldPriceResult(
-                    gold_code=gold_code,
-                    name="",
-                    last_price=float("nan"),
-                    raise_value=float("nan"),
-                    raise_percent=float("nan"),
-                    trade_datetime="",
-                    raw={"error": str(exc)},
-                )
-                _send_email_if_needed(dummy)
-            except Exception:
-                pass
         return 1
 
     now = _now_in_timezone(tz_name)
@@ -332,28 +213,6 @@ def main() -> int:
     log_line = json.dumps(log_payload, ensure_ascii=False) + "\n"
     print(log_line.strip())
     _append_log_line(log_line)
-
-    target_emailed = False
-    try:
-        target_emailed = _send_target_price_email_if_needed(result)
-    except Exception as exc:
-        warn = f"[{now.isoformat(sep=' ', timespec='seconds')}] target email send failed: {exc}\n"
-        print(warn.strip())
-        _append_log_line(warn)
-
-    if target_emailed:
-        print("[alert] lastPrice > TARGET_PRICE_NOTIFY, email sent")
-
-    emailed = False
-    try:
-        emailed = _send_email_if_needed(result)
-    except Exception as exc:
-        warn = f"[{now.isoformat(sep=' ', timespec='seconds')}] email send failed: {exc}\n"
-        print(warn.strip())
-        _append_log_line(warn)
-
-    if emailed:
-        print("[alert] raisePercent < 0, email sent")
 
     return 0
 
