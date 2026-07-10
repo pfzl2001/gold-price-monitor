@@ -37,9 +37,7 @@ jobs:
           GOLD_TZ: "Asia/Shanghai"
           GOLD_CODE: "CZB-JCJ"
           TRUST_ENV: "0"
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # monitor.py 只负责获取和记录价格，邮件通知由下面的 buy_strategy.py 处理（带防刷屏限制）
         run: python monitor.py
 
       - name: Run buy strategy analysis
