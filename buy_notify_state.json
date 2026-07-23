@@ -2,9 +2,9 @@
   "last_notified_price": 869.7,
   "last_notified_at": "2026-07-01 12:24:27+08:00",
   "intraday_bot": {
-    "position": null,
-    "entry_price": 0.0,
-    "stop_loss": 0.0
+    "position": "LONG",
+    "entry_price": 884.78,
+    "stop_loss": 883.0721428571428
   },
   "actual_cost_notify": {
     "last_notified_price": 896.98,
