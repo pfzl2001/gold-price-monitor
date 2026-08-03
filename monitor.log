@@ -9385,3 +9385,4 @@
 {"timestamp": "2026-08-03 17:00:53+08:00", "goldCode": "CZB-JCJ", "name": "浙商银行积存金", "lastPrice": 883.28, "raise": 1.64, "raisePercent": 0.0018602, "tradeDateTime": "2026-08-03 17:00:51"}
 {"timestamp": "2026-08-03 17:09:54+08:00", "goldCode": "CZB-JCJ", "name": "浙商银行积存金", "lastPrice": 883.33, "raise": 1.69, "raisePercent": 0.0019169, "tradeDateTime": "2026-08-03 17:09:53"}
 {"timestamp": "2026-08-03 17:16:56+08:00", "goldCode": "CZB-JCJ", "name": "浙商银行积存金", "lastPrice": 883.46, "raise": 1.82, "raisePercent": 0.0020643, "tradeDateTime": "2026-08-03 17:16:54"}
+{"timestamp": "2026-08-03 17:24:22+08:00", "goldCode": "CZB-JCJ", "name": "浙商银行积存金", "lastPrice": 882.33, "raise": 0.69, "raisePercent": 0.0007826, "tradeDateTime": "2026-08-03 17:24:20"}
