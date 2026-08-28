@@ -1061,8 +1061,149 @@ class BuyStrategyAnalyzer:
 
         return True
 
+    def _build_cost_alert_html(self, analysis: Dict[str, Any]) -> str:
+        """生成止盈止损 HTML 提醒邮件（已持仓模式）"""
+        now = _now_in_timezone(DEFAULT_TZ)
+        signal = analysis["signal"]
+        current_price = analysis["current_price"]
+        cost = analysis["cost"]
+        diff_pct = analysis["diff_pct"]
+        reason = analysis["reason"]
+
+        tp_pct = self.config.actual_cost_take_profit_pct
+        sl_pct = -self.config.actual_cost_stop_loss_pct
+        ad_pct = -self.config.actual_cost_average_down_pct
+
+        tp_price = cost * (1 + tp_pct / 100)
+        sl_price = cost * (1 + sl_pct / 100)
+        ad_price = cost * (1 + ad_pct / 100)
+
+        # 信号样式映射
+        style_map = {
+            "TAKE_PROFIT": {
+                "banner_bg": "linear-gradient(135deg, #10b981, #059669)",
+                "icon": "🎉",
+                "title": "触发止盈 · 建议分批落袋为安",
+                "badge_bg": "#10b981",
+                "badge_text": "止盈信号",
+                "action": "当前浮盈已达预设止盈阈值，建议考虑分批卖出锁定利润。可先卖出 50% 持仓，剩余部分设置更高止盈点。",
+            },
+            "STOP_LOSS": {
+                "banner_bg": "linear-gradient(135deg, #ef4444, #dc2626)",
+                "icon": "🚨",
+                "title": "触发止损 · 请立即关注风控",
+                "badge_bg": "#ef4444",
+                "badge_text": "止损警报",
+                "action": "当前浮亏已达预设止损阈值，建议及时止损以控制损失。请评估市场趋势后决定是否减仓。",
+            },
+            "AVERAGE_DOWN": {
+                "banner_bg": "linear-gradient(135deg, #f59e0b, #d97706)",
+                "icon": "📉",
+                "title": "达到补仓区间 · 可考虑摊薄成本",
+                "badge_bg": "#f59e0b",
+                "badge_text": "补仓信号",
+                "action": "当前价格低于成本价一定幅度，可考虑适当补仓以降低持仓均价。建议分批小额补入，控制总仓位风险。",
+            },
+        }
+        style = style_map.get(signal, style_map["TAKE_PROFIT"])
+
+        pnl_color = "#10b981" if diff_pct >= 0 else "#ef4444"
+        pnl_val = current_price - cost
+
+        # 计算进度条（当前价格在 止损~止盈 区间的位置）
+        total_range = tp_pct - sl_pct
+        if total_range > 0:
+            position_pct = max(0, min(100, (diff_pct - sl_pct) / total_range * 100))
+        else:
+            position_pct = 50
+
+        html = f"""
+<html>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f2f5;padding:24px 0;">
+<tr><td align="center">
+<table width="640" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+
+  <!-- 顶部横幅 -->
+  <tr><td style="background:{style['banner_bg']};padding:32px 40px;text-align:center;">
+    <p style="margin:0;font-size:48px;">{style['icon']}</p>
+    <h1 style="margin:8px 0 0;color:#ffffff;font-size:22px;font-weight:700;">{style['title']}</h1>
+    <p style="margin:8px 0 0;color:rgba(255,255,255,0.8);font-size:13px;">{now.strftime('%Y-%m-%d %H:%M:%S')} · 持仓风控引擎</p>
+  </td></tr>
+
+  <!-- 持仓状态面板 -->
+  <tr><td style="padding:32px 40px 24px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+    <tr>
+      <td width="33%" style="text-align:center;padding:16px;background:#f8fafc;border-radius:12px 0 0 12px;">
+        <p style="margin:0;font-size:12px;color:#6b7280;letter-spacing:0.5px;">持仓成本价</p>
+        <p style="margin:6px 0 0;font-size:24px;font-weight:800;color:#1e293b;">¥{cost:.2f}</p>
+      </td>
+      <td width="34%" style="text-align:center;padding:16px;background:#f8fafc;border-left:2px solid #e5e7eb;border-right:2px solid #e5e7eb;">
+        <p style="margin:0;font-size:12px;color:#6b7280;letter-spacing:0.5px;">当前市价</p>
+        <p style="margin:6px 0 0;font-size:24px;font-weight:800;color:#1e293b;">¥{current_price:.2f}</p>
+      </td>
+      <td width="33%" style="text-align:center;padding:16px;background:#f8fafc;border-radius:0 12px 12px 0;">
+        <p style="margin:0;font-size:12px;color:#6b7280;letter-spacing:0.5px;">浮动盈亏</p>
+        <p style="margin:6px 0 0;font-size:24px;font-weight:800;color:{pnl_color};">{diff_pct:+.2f}%</p>
+        <p style="margin:2px 0 0;font-size:13px;color:{pnl_color};">{pnl_val:+.2f} 元/克</p>
+      </td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- 止盈止损区间可视化 -->
+  <tr><td style="padding:0 40px 28px;">
+    <h2 style="margin:0 0 16px;font-size:15px;color:#1e293b;border-bottom:2px solid #e5e7eb;padding-bottom:8px;">📐 止盈止损区间图</h2>
+    <!-- 进度条 -->
+    <div style="position:relative;height:28px;background:linear-gradient(90deg, #fecaca 0%, #fef3c7 35%, #d1fae5 100%);border-radius:14px;margin:16px 0 8px;">
+      <div style="position:absolute;left:{position_pct}%;top:-2px;width:4px;height:32px;background:#1e293b;border-radius:2px;transform:translateX(-50%);"></div>
+      <div style="position:absolute;left:{position_pct}%;top:-22px;transform:translateX(-50%);background:#1e293b;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap;">当前 {diff_pct:+.2f}%</div>
+    </div>
+    <!-- 标注 -->
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="text-align:left;font-size:11px;color:#ef4444;font-weight:600;">止损 {sl_pct:+.1f}%<br/>¥{sl_price:.2f}</td>
+      <td style="text-align:center;font-size:11px;color:#f59e0b;font-weight:600;">补仓 {ad_pct:+.1f}%<br/>¥{ad_price:.2f}</td>
+      <td style="text-align:center;font-size:11px;color:#6b7280;font-weight:600;">成本价<br/>¥{cost:.2f}</td>
+      <td style="text-align:right;font-size:11px;color:#10b981;font-weight:600;">止盈 +{tp_pct:.1f}%<br/>¥{tp_price:.2f}</td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- 策略分析意见 -->
+  <tr><td style="padding:0 40px 24px;">
+    <div style="padding:16px 20px;border-radius:12px;background:#f8fafc;border-left:4px solid {style['badge_bg']};">
+      <p style="margin:0 0 4px;">
+        <span style="display:inline-block;padding:3px 10px;border-radius:12px;background:{style['badge_bg']};color:#fff;font-size:12px;font-weight:600;">{style['badge_text']}</span>
+      </p>
+      <p style="margin:8px 0 0;font-size:14px;color:#374151;line-height:1.6;">{reason}</p>
+    </div>
+  </td></tr>
+
+  <!-- 操作建议 -->
+  <tr><td style="padding:0 40px 32px;">
+    <div style="padding:20px;border-radius:12px;background:{style['banner_bg']};text-align:center;">
+      <p style="margin:0;font-size:16px;font-weight:700;color:#ffffff;">💡 操作建议</p>
+      <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.9);line-height:1.6;">{style['action']}</p>
+    </div>
+  </td></tr>
+
+  <!-- 底部 -->
+  <tr><td style="padding:20px 40px;background:#f8fafc;text-align:center;border-top:1px solid #e5e7eb;">
+    <p style="margin:0;font-size:12px;color:#9ca3af;">⚠️ 本提醒由持仓风控引擎自动生成，仅供参考，不构成投资建议。</p>
+    <p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">Gold Price Monitor · Position Risk Control</p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+        return html
+
     def send_actual_cost_notification(self, analysis: Dict[str, Any]) -> bool:
-        """发送实际成本策略邮件提醒"""
+        """发送实际成本策略邮件提醒（已持仓模式 - HTML 邮件）"""
         global ENABLE_EMAIL_NOTIFICATION
         if not ENABLE_EMAIL_NOTIFICATION:
             print("[info] [成本策略] 邮件通知已关闭，跳过发送成本策略提醒。")
@@ -1086,27 +1227,17 @@ class BuyStrategyAnalyzer:
         diff_pct = analysis["diff_pct"]
 
         subject_map = {
-            "TAKE_PROFIT": "💰 黄金实际持仓【建议分批止盈】",
-            "STOP_LOSS": "🚨 黄金实际持仓【风控止损警报】",
-            "AVERAGE_DOWN": "📉 黄金实际持仓【建议分批补仓】",
+            "TAKE_PROFIT": f"🎉 止盈信号！浮盈 {diff_pct:+.2f}% | 金价 {current_price:.2f} vs 成本 {cost:.2f}",
+            "STOP_LOSS": f"🚨 止损警报！浮亏 {diff_pct:+.2f}% | 金价 {current_price:.2f} vs 成本 {cost:.2f}",
+            "AVERAGE_DOWN": f"📉 补仓信号 | 浮亏 {diff_pct:+.2f}% | 金价 {current_price:.2f} vs 成本 {cost:.2f}",
         }
-        subject = f"{subject_map.get(signal, '🔔 黄金持仓动向')} - 当前 {current_price:.2f} 元/克"
+        subject = subject_map.get(signal, f"🔔 黄金持仓动向 - 当前 {current_price:.2f} 元/克")
+
+        body = self._build_cost_alert_html(analysis)
 
         now = _now_in_timezone(DEFAULT_TZ)
-        body = (
-            f"🔔 您设置的实际黄金持仓成本策略已触发提醒！\n\n"
-            f"📊 持仓与市价状态:\n"
-            f"  - 您的成本价: {cost:.2f} 元/克\n"
-            f"  - 当前最新价: {current_price:.2f} 元/克\n"
-            f"  - 当前收益率: {diff_pct:+.2f}%\n\n"
-            f"📢 策略分析意见:\n"
-            f"  - {analysis['reason']}\n\n"
-            f"⏰ 报价时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        )
-
         success = send_resend_email(subject, body, email_to)
         if success:
-            # 更新状态
             today_str = now.date().isoformat()
             state = self._load_notify_state()
             cost_state = state.get("actual_cost_notify")
@@ -1357,42 +1488,178 @@ class BuyStrategyAnalyzer:
 
         return True
 
+    def _calculate_score_100(self, result: Dict[str, Any]) -> int:
+        """将 total_score / max_score 映射到 0-100 分制"""
+        total = result.get("total_score", 0)
+        max_s = result.get("max_score", 1)
+        if max_s <= 0:
+            return 0
+        # total_score 可能为负（当 AVOID 多时），映射到 0-100
+        # 范围：-max_score ~ +max_score  ->  0 ~ 100
+        raw = (total + max_s) / (2 * max_s) * 100
+        return max(0, min(100, int(round(raw))))
+
+    def _score_grade(self, score: int) -> str:
+        """评分等级"""
+        if score >= 90:
+            return "S"
+        elif score >= 75:
+            return "A"
+        elif score >= 60:
+            return "B"
+        elif score >= 40:
+            return "C"
+        else:
+            return "D"
+
     def format_email_body(self, result: Dict[str, Any]) -> str:
-        """格式化邮件内容"""
+        """生成精美 HTML 买入推荐邮件（未持仓模式）"""
         now = _now_in_timezone(DEFAULT_TZ)
-        lines = [
-            "=" * 50,
-            "📊 金价买入策略分析 - 建议买入！",
-            "=" * 50,
-            "",
-            f"⏰ 分析时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"💰 当前金价: {result['current_price']:.2f} 元/克",
-            f"📈 今日涨跌: {result['raise_percent']:+.2f}%",
-            f"🕐 报价时间: {result['trade_time']}",
-            "",
-            "-" * 50,
-            "📋 各策略分析结果:",
-            "-" * 50,
-        ]
+        score = self._calculate_score_100(result)
+        grade = self._score_grade(score)
+        price = result.get("current_price", 0)
+        raise_pct = result.get("raise_percent", 0)
+        trade_time = result.get("trade_time", "")
+        overall = result.get("overall_signal", Signal.HOLD)
+        advice = result.get("advice", "")
 
-        for strategy in result["strategies"]:
-            lines.append(f"  {strategy.signal.value} {strategy.name}")
-            lines.append(f"     └─ {strategy.reason}")
-            lines.append("")
+        # 根据评分选择颜色
+        if score >= 75:
+            score_color = "#10b981"  # 绿
+            score_bg = "#ecfdf5"
+            cta_bg = "linear-gradient(135deg, #10b981, #059669)"
+            cta_text = "🔥 强烈推荐买入"
+        elif score >= 60:
+            score_color = "#f59e0b"  # 黄
+            score_bg = "#fffbeb"
+            cta_bg = "linear-gradient(135deg, #f59e0b, #d97706)"
+            cta_text = "📊 建议考虑买入"
+        else:
+            score_color = "#6b7280"  # 灰
+            score_bg = "#f9fafb"
+            cta_bg = "linear-gradient(135deg, #6b7280, #4b5563)"
+            cta_text = "⏳ 暂时观望"
 
-        lines.extend([
-            "-" * 50,
-            f"📊 综合评分: {result['total_score']:.1f} / {result['max_score']:.1f}",
-            "",
-            f"🎯 {result['overall_signal'].value}",
-            f"   {result['advice']}",
-            "=" * 50,
-        ])
+        raise_color = "#ef4444" if raise_pct < 0 else "#10b981"
 
-        return "\n".join(lines)
+        # 构建策略卡片 HTML
+        signal_map = {
+            Signal.STRONG_BUY: ("🟢 强烈买入", "#10b981", "#ecfdf5"),
+            Signal.BUY: ("🟡 建议买入", "#f59e0b", "#fffbeb"),
+            Signal.HOLD: ("⚪ 观望等待", "#6b7280", "#f9fafb"),
+            Signal.AVOID: ("🔴 暂不建议", "#ef4444", "#fef2f2"),
+        }
+
+        strategy_rows = ""
+        for s in result.get("strategies", []):
+            label, color, bg = signal_map.get(s.signal, ("⚪ 未知", "#6b7280", "#f9fafb"))
+            strategy_rows += f"""
+            <tr>
+              <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;font-weight:600;color:#1f2937;">{s.name}</td>
+              <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;text-align:center;">
+                <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:{bg};color:{color};font-size:13px;font-weight:600;">{label}</span>
+              </td>
+              <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#6b7280;font-size:13px;">{s.reason}</td>
+            </tr>"""
+
+        html = f"""
+<html>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f2f5;padding:24px 0;">
+<tr><td align="center">
+<table width="640" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+
+  <!-- 顶部渐变横幅 -->
+  <tr><td style="background:linear-gradient(135deg,#1e293b,#334155);padding:32px 40px;text-align:center;">
+    <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:0.5px;">📊 金价量化买入分析报告</h1>
+    <p style="margin:8px 0 0;color:#94a3b8;font-size:14px;">{now.strftime('%Y-%m-%d %H:%M:%S')} · 自动化策略引擎</p>
+  </td></tr>
+
+  <!-- 评分仪表盘 -->
+  <tr><td style="padding:32px 40px 24px;text-align:center;background:{score_bg};">
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td width="50%" style="text-align:center;vertical-align:top;">
+        <div style="display:inline-block;width:120px;height:120px;border-radius:50%;background:conic-gradient({score_color} {score * 3.6}deg, #e5e7eb {score * 3.6}deg);padding:8px;">
+          <div style="width:104px;height:104px;border-radius:50%;background:#ffffff;display:flex;align-items:center;justify-content:center;line-height:104px;">
+            <span style="font-size:36px;font-weight:800;color:{score_color};">{score}</span>
+          </div>
+        </div>
+        <p style="margin:12px 0 0;font-size:14px;color:#6b7280;">综合评分（满分100）</p>
+        <p style="margin:4px 0 0;">
+          <span style="display:inline-block;padding:4px 16px;border-radius:20px;background:{score_color};color:#ffffff;font-size:18px;font-weight:700;">{grade} 级</span>
+        </p>
+      </td>
+      <td width="50%" style="text-align:center;vertical-align:top;padding-top:12px;">
+        <p style="margin:0;font-size:42px;font-weight:800;color:#1e293b;">¥{price:.2f}</p>
+        <p style="margin:4px 0 0;font-size:14px;color:#6b7280;">当前金价（元/克）</p>
+        <p style="margin:8px 0 0;">
+          <span style="display:inline-block;padding:4px 12px;border-radius:8px;background:{raise_color};color:#ffffff;font-size:14px;font-weight:600;">
+            今日 {raise_pct:+.2f}%
+          </span>
+        </p>
+        <p style="margin:8px 0 0;font-size:12px;color:#9ca3af;">报价时间: {trade_time}</p>
+      </td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- CTA 行动号召 -->
+  <tr><td style="padding:0 40px 24px;text-align:center;">
+    <div style="padding:20px;border-radius:12px;background:{cta_bg};text-align:center;">
+      <p style="margin:0;font-size:22px;font-weight:800;color:#ffffff;letter-spacing:1px;">{cta_text}</p>
+      <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">{advice}</p>
+    </div>
+  </td></tr>
+
+  <!-- 策略分析表格 -->
+  <tr><td style="padding:0 40px 32px;">
+    <h2 style="margin:0 0 16px;font-size:16px;color:#1e293b;border-bottom:2px solid #e5e7eb;padding-bottom:8px;">📋 各策略信号详情</h2>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      <tr style="background:#f8fafc;">
+        <th style="padding:10px 16px;text-align:left;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid #e5e7eb;">策略名称</th>
+        <th style="padding:10px 16px;text-align:center;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid #e5e7eb;">信号</th>
+        <th style="padding:10px 16px;text-align:left;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid #e5e7eb;">分析详情</th>
+      </tr>
+      {strategy_rows}
+    </table>
+  </td></tr>
+
+  <!-- 评分明细 -->
+  <tr><td style="padding:0 40px 32px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border-radius:12px;overflow:hidden;">
+    <tr>
+      <td style="padding:16px 24px;text-align:center;border-right:1px solid #e5e7eb;">
+        <p style="margin:0;font-size:12px;color:#6b7280;">原始得分</p>
+        <p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#1e293b;">{result.get('total_score', 0):.1f} / {result.get('max_score', 0):.1f}</p>
+      </td>
+      <td style="padding:16px 24px;text-align:center;border-right:1px solid #e5e7eb;">
+        <p style="margin:0;font-size:12px;color:#6b7280;">百分制评分</p>
+        <p style="margin:4px 0 0;font-size:20px;font-weight:700;color:{score_color};">{score} / 100</p>
+      </td>
+      <td style="padding:16px 24px;text-align:center;">
+        <p style="margin:0;font-size:12px;color:#6b7280;">综合信号</p>
+        <p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#1e293b;">{overall.value}</p>
+      </td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- 底部 -->
+  <tr><td style="padding:20px 40px;background:#f8fafc;text-align:center;border-top:1px solid #e5e7eb;">
+    <p style="margin:0;font-size:12px;color:#9ca3af;">⚠️ 本报告由量化策略引擎自动生成，仅供参考，不构成投资建议。</p>
+    <p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">Gold Price Monitor · Powered by Quantitative Analysis</p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+        return html
 
     def send_buy_notification(self, result: Dict[str, Any]) -> bool:
-        """当建议买入时发送邮件通知"""
+        """当建议买入时发送邮件通知（未持仓模式）"""
         global ENABLE_EMAIL_NOTIFICATION
         if not ENABLE_EMAIL_NOTIFICATION:
             print("[info] 邮件通知已关闭，跳过发送常规买入提醒。")
@@ -1402,23 +1669,27 @@ class BuyStrategyAnalyzer:
             return False
 
         if not self._should_notify_in_day(result):
-            # 具体跳过原因已在 _should_notify_in_day 中打印
             return False
 
         email_to = os.getenv("EMAIL_TO", "").strip()
-        email_subject = os.getenv("EMAIL_SUBJECT", "🔔 金价买入提醒").strip()
-
         if not email_to:
             print("[warn] EMAIL_TO 为空，跳过发送")
             return False
 
-        # 邮件标题加上当前价格
         price = result.get("current_price", 0)
-        subject = f"{email_subject} - 当前 {price:.2f} 元/克"
+        score = self._calculate_score_100(result)
+        overall = result.get("overall_signal", Signal.HOLD)
+
+        # 根据信号强度动态生成邮件标题
+        if overall == Signal.STRONG_BUY:
+            subject = f"🔥🔥🔥 强烈推荐买入！量化评分 {score}/100 - 金价 {price:.2f} 元/克"
+        elif overall == Signal.BUY:
+            subject = f"📊 建议买入 | 量化评分 {score}/100 - 金价 {price:.2f} 元/克"
+        else:
+            subject = f"🔔 金价买入提醒 | 评分 {score}/100 - 当前 {price:.2f} 元/克"
 
         body = self.format_email_body(result)
 
-        # 使用统一的 Resend 邮件发送逻辑
         success = send_resend_email(subject, body, email_to)
         if success:
             now = _now_in_timezone(DEFAULT_TZ)
@@ -1426,7 +1697,6 @@ class BuyStrategyAnalyzer:
             state = self._load_notify_state()
             state["last_notified_price"] = float(price)
             state["last_notified_at"] = now.isoformat(sep=" ", timespec="seconds")
-            # 更新每日计数器
             if state.get("notify_date") == today_str:
                 state["notify_count_today"] = int(state.get("notify_count_today", 0)) + 1
             else:
@@ -1682,16 +1952,22 @@ def main():
     analyzer = BuyStrategyAnalyzer(config)
     result = analyzer.print_report()
 
-    # 如果建议买入，发送邮件通知（原有策略）
-    analyzer.send_buy_notification(result)
+    # 根据 GOLD_COST 自动切换通知模式
+    if config.actual_cost is None or config.actual_cost <= 0:
+        # ========== 未持仓模式 ==========
+        # 在合适的买入时机发送带量化评分的推荐邮件
+        print("\n[mode] 📭 未持仓模式：监控买入时机")
+        analyzer.send_buy_notification(result)
+    else:
+        # ========== 已持仓模式 ==========
+        # 发送止盈/止损/补仓的风控提醒邮件
+        print(f"\n[mode] 📈 已持仓模式：成本 {config.actual_cost:.2f} 元/克，监控止盈止损")
+        if "actual_cost_analysis" in result and result["actual_cost_analysis"]:
+            analyzer.send_actual_cost_notification(result["actual_cost_analysis"])
 
-    # 运行并发送 8分钟高频策略通知
+    # 8分钟高频策略通知（两种模式下都运行）
     if "intraday_bot" in result:
         analyzer.send_intraday_notification(result["intraday_bot"])
-
-    # 运行并发送实际持仓成本提醒通知
-    if "actual_cost_analysis" in result and result["actual_cost_analysis"]:
-        analyzer.send_actual_cost_notification(result["actual_cost_analysis"])
 
 
 if __name__ == "__main__":
