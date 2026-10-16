@@ -36,7 +36,7 @@ from monitor import fetch_gold_price, GoldPriceResult, _now_in_timezone, DEFAULT
 GOLD_COST = None
 
 # 是否启用邮件通知。如果设为 False，系统将完全不会发送任何提醒邮件
-ENABLE_EMAIL_NOTIFICATION = True
+ENABLE_EMAIL_NOTIFICATION = False
 # ==================================================
 
 
