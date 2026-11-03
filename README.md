@@ -57,7 +57,6 @@ gold-price-monitor/
    | `EMAIL_TO` | ✅ | 收件人邮箱（支持逗号分隔多个邮箱） |
    | `CURRENT_NAV` | ⭕ | 基金当前单位净值（可选，用于计算市值；不填则回退到 py 配置区） |
    | `FUND_SHARES` | ⭕ | 基金持有份额（可选，用于计算周五收益；不填则回退到 py 配置区） |
-   | `FUND_COST_AMOUNT` | ⭕ | 基金买入金额 / 本金（可选，用于计算累计收益） |
 
 3. **启用 GitHub Actions**
 
@@ -203,17 +202,16 @@ ENABLE_EMAIL_NOTIFICATION = False
 ```python
 CURRENT_NAV = 1.068775        # 现在的单位净值
 FUND_SHARES = 84838.37        # 现有的持有份额（份）
-FUND_COST_AMOUNT = 90576.00   # 买入本金（可选，用于累计收益）
 ```
 
-优先级：`--nav` / `--shares` / `--cost` 命令行参数 > 环境变量或 GitHub Secrets > 配置区常量。变量名为 `CURRENT_NAV`、`FUND_SHARES`、`FUND_COST_AMOUNT`。
+优先级：`--nav` / `--shares` 命令行参数 > 环境变量或 GitHub Secrets > 配置区常量。变量名为 `CURRENT_NAV`、`FUND_SHARES`。
 
 **两类净值各司其职**（避免口径混淆）：
 
 | 用途 | 净值来源 |
 |------|---------|
 | 周五 vs 周四涨跌、周五当日收益 | 官网自动抓取的周五 / 周四净值，脚本自动计算 |
-| 当前市值、累计收益 | **你配置的** `CURRENT_NAV` × 份额，与 App 显示一致 |
+| 当前市值 | **你配置的** `CURRENT_NAV` × 份额，与 App 显示一致 |
 
 收益口径：
 
@@ -221,10 +219,9 @@ FUND_COST_AMOUNT = 90576.00   # 买入本金（可选，用于累计收益）
 |------|---------|
 | 周五当日收益 | `份额 × (官网周五净值 − 官网周四净值)` |
 | 当前市值 | `份额 × 你配置的 CURRENT_NAV` |
-| 累计收益 / 收益率 | `当前市值 − 投入本金`，收益率再除以本金 |
 
 > [!WARNING]
-> 直接把净值 / 份额 / 金额写进 py 并提交到公开仓库会公开持仓信息。若不想公开，把三个常量改回 `0.0`，在仓库 **Settings → Secrets** 里新增 `CURRENT_NAV`、`FUND_SHARES`、`FUND_COST_AMOUNT`（工作流会自动注入为环境变量）；`CURRENT_NAV` 不配置时市值会回退到官网周五净值。
+> 直接把净值 / 份额写进 py 并提交到公开仓库会公开持仓信息。若不想公开，把两个常量改回 `0.0`，在仓库 **Settings → Secrets** 里新增 `CURRENT_NAV`、`FUND_SHARES`（工作流会自动注入为环境变量）；`CURRENT_NAV` 不配置时市值会回退到官网周五净值。
 
 邮件主题与正文首屏会直接显示「周五当日收益 ¥xx.xx」，红涨绿跌；明细区显示你配置的当前净值与由此算出的市值。
 
@@ -246,7 +243,7 @@ FUND_COST_AMOUNT = 90576.00   # 买入本金（可选，用于累计收益）
 python fund_nav_notify.py --dry-run                                   # 生成报告与 HTML 预览，不发送邮件
 python fund_nav_notify.py --check                                     # 只检查净值是否已公布
 python fund_nav_notify.py --date 2026-10-30 --dry-run                # 指定周五补发 / 测试
-python fund_nav_notify.py --nav 1.068775 --shares 100000 --cost 106000 --dry-run  # 临时试算
+python fund_nav_notify.py --nav 1.068775 --shares 100000 --dry-run         # 临时试算
 python fund_nav_notify.py --force                                     # 忽略防重复记录强制发送
 ```
 

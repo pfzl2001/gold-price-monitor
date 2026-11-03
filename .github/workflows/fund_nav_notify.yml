@@ -44,7 +44,6 @@ jobs:
           # 可选 Secrets：未配置时回退到 py 配置区常量，避免持仓信息进入公开仓库
           CURRENT_NAV: ${{ secrets.CURRENT_NAV }}
           FUND_SHARES: ${{ secrets.FUND_SHARES }}
-          FUND_COST_AMOUNT: ${{ secrets.FUND_COST_AMOUNT }}
           # 如官网证书链异常可设为 1 跳过校验（默认 0，脚本会自动降级重试）
           NAV_SKIP_SSL_VERIFY: "0"
         run: python fund_nav_notify.py
