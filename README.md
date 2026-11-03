@@ -4,7 +4,7 @@
 
 基于 Python + GitHub Actions 的黄金价格自动监控与量化买入分析系统。金价数据来源于**京东金融**黄金价格接口，系统定时获取实时金价并结合多种量化技术指标自动分析买入时机，满足条件时通过邮件发送提醒通知。
 
-此外，项目还包含**基金净值周五播报**：每周六查询上周五徽银理财产品（PNHY230387A）的单位净值，计算相对**周四**的涨跌幅，并结合持仓份额 / 金额直接给出周五收益，通过同一套 Resend 邮件通道推送。
+此外，项目还包含**基金净值周五播报**：每周六查询上周五徽银理财产品（PNHY230387A）的单位净值，计算相对**周四**的涨跌幅，并结合你配置的当前净值与份额直接给出周五收益，通过同一套 Resend 邮件通道推送。
 
 > [!IMPORTANT]
 > 金价监控当前已按需求**停止**：开关位于 `monitor.py` → `ENABLE_GOLD_MONITOR = False`。详见「🔛 金价监控开关」章节；基金净值播报不受该开关影响，独立运行。
@@ -58,6 +58,7 @@ gold-price-monitor/
    | `SMTP_PASS` | ✅ | Resend API Key（在 [resend.com](https://resend.com) 注册获取） |
    | `SENDER_EMAIL` | ✅ | 发件人邮箱（需在 Resend 中验证域名，如 `noreply@mail.yourdomain.com`） |
    | `EMAIL_TO` | ✅ | 收件人邮箱（支持逗号分隔多个邮箱） |
+   | `CURRENT_NAV` | ⭕ | 基金当前单位净值（可选，用于计算市值；不填则回退到 py 配置区） |
    | `FUND_SHARES` | ⭕ | 基金持有份额（可选，用于计算周五收益；不填则回退到 py 配置区） |
    | `FUND_COST_AMOUNT` | ⭕ | 基金买入金额 / 本金（可选，用于计算累计收益） |
 
@@ -201,27 +202,35 @@ ENABLE_EMAIL_NOTIFICATION = True
 
 **为什么周六查、对比周四**：银行理财净值多为 T+1 披露，周五当晚通常查不到周五净值；周六查询可确保拿到周五数据。对比基准固定取同一周的**周四**净值；若周四恰逢节假日无净值公布，则顺延至周五之前最近的净值日，并在邮件中明确标注基准日期。
 
-**持仓配置（用于直接算出周五收益）**：在 `fund_nav_notify.py` 配置区填写：
+**持仓配置（由你维护）**：在 `fund_nav_notify.py` 配置区填写，从 App 抄录这两个数字，净值变动或加仓 / 赎回后更新即可：
 
 ```python
-FUND_SHARES = 100000.00       # 持有份额（份）
-FUND_COST_AMOUNT = 106000.00  # 买入投入金额（元，本金）
+CURRENT_NAV = 1.068775        # 现在的单位净值
+FUND_SHARES = 84838.37        # 现有的持有份额（份）
+FUND_COST_AMOUNT = 90576.00   # 买入本金（可选，用于累计收益）
 ```
 
-优先级：`--shares` / `--cost` 命令行参数 > 环境变量或 GitHub Secrets > 配置区常量。
+优先级：`--nav` / `--shares` / `--cost` 命令行参数 > 环境变量或 GitHub Secrets > 配置区常量。变量名为 `CURRENT_NAV`、`FUND_SHARES`、`FUND_COST_AMOUNT`。
 
-> [!WARNING]
-> 直接把金额写进 py 并提交到公开仓库会公开持仓信息。推荐保持常量为 `0.0`，在仓库 **Settings → Secrets** 里新增 `FUND_SHARES` 与 `FUND_COST_AMOUNT`（工作流会自动注入为环境变量）。只填份额即可算出**周五当日收益**；填了本金才额外给出当前市值、累计收益与收益率。
+**两类净值各司其职**（避免口径混淆）：
+
+| 用途 | 净值来源 |
+|------|---------|
+| 周五 vs 周四涨跌、周五当日收益 | 官网自动抓取的周五 / 周四净值，脚本自动计算 |
+| 当前市值、累计收益 | **你配置的** `CURRENT_NAV` × 份额，与 App 显示一致 |
 
 收益口径：
 
 | 指标 | 计算方式 |
 |------|---------|
-| 周五当日收益 | `份额 × (周五单位净值 − 周四单位净值)` |
-| 当前市值 | `份额 × 周五单位净值` |
+| 周五当日收益 | `份额 × (官网周五净值 − 官网周四净值)` |
+| 当前市值 | `份额 × 你配置的 CURRENT_NAV` |
 | 累计收益 / 收益率 | `当前市值 − 投入本金`，收益率再除以本金 |
 
-邮件主题与正文首屏会直接显示「周五当日收益 ¥xx.xx」，红涨绿跌。
+> [!WARNING]
+> 直接把净值 / 份额 / 金额写进 py 并提交到公开仓库会公开持仓信息。若不想公开，把三个常量改回 `0.0`，在仓库 **Settings → Secrets** 里新增 `CURRENT_NAV`、`FUND_SHARES`、`FUND_COST_AMOUNT`（工作流会自动注入为环境变量）；`CURRENT_NAV` 不配置时市值会回退到官网周五净值。
+
+邮件主题与正文首屏会直接显示「周五当日收益 ¥xx.xx」，红涨绿跌；明细区显示你配置的当前净值与由此算出的市值。
 
 **数据来源**：徽银理财官网 `lccs_income.php?fundCode=PNHY230387A&dateType=all` 全量净值 JSON（与 `lccs_display.php?id=17222` 页面同源）；接口异常时自动降级解析 `lccs_income_list.php` HTML 表格。接口返回的重复日期记录会自动去重。若本地环境缺少根证书导致 SSL 校验失败，脚本会自动降级重试一次，也可设置 `NAV_SKIP_SSL_VERIFY=1` 显式跳过校验。
 
@@ -241,7 +250,7 @@ FUND_COST_AMOUNT = 106000.00  # 买入投入金额（元，本金）
 python fund_nav_notify.py --dry-run                                   # 生成报告与 HTML 预览，不发送邮件
 python fund_nav_notify.py --check                                     # 只检查净值是否已公布
 python fund_nav_notify.py --date 2026-10-30 --dry-run                # 指定周五补发 / 测试
-python fund_nav_notify.py --shares 100000 --cost 106000 --dry-run    # 用示例持仓试算收益
+python fund_nav_notify.py --nav 1.068775 --shares 100000 --cost 106000 --dry-run  # 临时试算
 python fund_nav_notify.py --force                                     # 忽略防重复记录强制发送
 ```
 

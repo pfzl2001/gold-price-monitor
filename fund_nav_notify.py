@@ -16,12 +16,17 @@
 对比基准固定取同一周的**周四**净值。若周四恰逢节假日无净值公布，则顺延至
 周五之前最近的一个净值日，并在邮件中明确标注基准日期，避免歧义。
 
-持仓配置
---------
-在下方「配置区」填写 FUND_SHARES（持有份额）与 FUND_COST_AMOUNT（买入金额 / 本金），
-也可用环境变量或 GitHub Secrets FUND_SHARES、FUND_COST_AMOUNT 覆盖
-（公开仓库推荐用 Secrets，避免持仓金额入库）。命令行 --shares / --cost 可临时试算。
-只填份额即可算出「周五当日收益」；填了本金才额外给出「累计收益 / 收益率」。
+持仓配置（由你维护）
+--------------------
+在下方「配置区」填写 CURRENT_NAV（现在的单位净值）与 FUND_SHARES（现有份额），
+两者均从 App 抄录，净值变动或加仓 / 赎回后更新即可。
+FUND_COST_AMOUNT（买入本金）可选，用于计算累计收益。
+
+两类净值各司其职，避免口径混淆：
+- 周五 vs 周四涨跌、周五当日收益：仍由官网自动抓取的净值计算（自动化核心）；
+- 当前市值、累计收益：按你配置的 CURRENT_NAV × 份额计算，与 App 显示一致。
+
+优先级：命令行 --nav / --shares / --cost > 环境变量或 GitHub Secrets > 配置区常量。
 
 数据源：徽银理财官网公开净值接口（与 lccs_display.php?id=17222 页面同源）
 主接口：lccs_income.php?fundCode=...&dateType=all   （JSON，全量历史）
@@ -32,7 +37,7 @@
     python fund_nav_notify.py                        # 正常运行（每周六由 Actions 触发）
     python fund_nav_notify.py --dry-run              # 只生成报告与预览，不发送邮件
     python fund_nav_notify.py --date 2026-10-30     # 指定目标周五（补发 / 测试）
-    python fund_nav_notify.py --shares 100000 --cost 106000 --dry-run   # 试算收益
+    python fund_nav_notify.py --shares 100000 --cost 106000 --nav 1.068775 --dry-run  # 临时试算
     python fund_nav_notify.py --force               # 忽略防重复记录，强制发送
     python fund_nav_notify.py --check               # 只检查净值是否已公布，不发邮件
 """
@@ -72,17 +77,20 @@ TIMEOUT_SECONDS = 20
 # 基金净值播报独立开关，与金价监控开关（monitor.py 的 ENABLE_GOLD_MONITOR）互不干扰
 ENABLE_FUND_NAV_NOTIFY = True
 
-# ---- 持仓配置：邮件会直接告诉你周五赚了多少钱 ----
-# 持有份额（份）。来自持仓截图：84,838.37 份
+# ---- 持仓配置（由你维护：从 App 抄这两个数字） ----
+# 现在的单位净值。截图为 2026-11-02 的 1.068775；净值更新后改这里
+CURRENT_NAV = 1.068775
+# 现有的持有份额（份）
 FUND_SHARES = 84838.37
-# 买入投入金额（元，本金）。由截图「持有市值 90,673.13 − 持有收益 +97.13」反推
+# 买入投入金额（元，本金）；可选，用于累计收益。由 90,673.13 − 97.13 反推
 FUND_COST_AMOUNT = 90576.00
 #
-# 优先级：命令行 --shares / --cost > 环境变量或 GitHub Secrets > 上面两个常量。
-# 注意：直接把金额写进本文件并提交到公开仓库会公开持仓信息。更稳妥的做法是
-#       保持这里为 0.0，在仓库 Settings → Secrets 里配置 FUND_SHARES /
-#       FUND_COST_AMOUNT（工作流会自动注入为环境变量）。
-# 只填份额就能算出「周五当日收益」；填了本金才额外给出「累计收益 / 收益率」。
+# 两类净值口径（重要）：
+#   · 周五涨跌 / 周五当日收益 = 官网抓取的 (周五净值 − 周四净值) × 份额，自动计算；
+#   · 当前市值 / 累计收益 = 你配置的 CURRENT_NAV × 份额 − 本金，与 App 对齐。
+# 优先级：命令行 --nav / --shares / --cost > 环境变量或 Secrets > 上面三个常量。
+# 环境变量名：CURRENT_NAV、FUND_SHARES、FUND_COST_AMOUNT（可用 GitHub Secrets 注入）。
+# 注意：数值写进本文件并提交到公开仓库会公开持仓信息，建议改用 Secrets。
 # --------------------------------------------------------
 
 # 颜色遵循 A 股 / 国内理财习惯：红涨绿跌
@@ -386,6 +394,8 @@ class Position:
     market_value: Optional[float] = None        # 当前市值
     total_profit: Optional[float] = None        # 累计收益
     total_return_pct: Optional[float] = None    # 累计收益率，%
+    current_nav: Optional[float] = None         # 计算市值所用的净值
+    nav_source: str = ""                        # 净值来源：你配置 / 官网周五净值
 
 
 def _env_float(name: str) -> Optional[float]:
@@ -402,23 +412,32 @@ def _env_float(name: str) -> Optional[float]:
 def resolve_position(
     shares_override: Optional[float] = None,
     cost_override: Optional[float] = None,
-) -> Tuple[float, float]:
+    nav_override: Optional[float] = None,
+) -> Tuple[float, float, float]:
     """解析持仓配置，优先级：命令行参数 > 环境变量 / Secrets > py 配置区常量"""
     shares = shares_override if shares_override is not None else _env_float("FUND_SHARES")
     cost = cost_override if cost_override is not None else _env_float("FUND_COST_AMOUNT")
+    current_nav = nav_override if nav_override is not None else _env_float("CURRENT_NAV")
     if shares is None:
         shares = FUND_SHARES
     if cost is None:
         cost = FUND_COST_AMOUNT
-    return float(shares or 0.0), float(cost or 0.0)
+    if current_nav is None:
+        current_nav = CURRENT_NAV
+    return float(shares or 0.0), float(cost or 0.0), float(current_nav or 0.0)
 
 
-def compute_position(report: FridayReport, shares: float, cost_amount: float) -> Position:
-    """按持有份额计算周五当日收益；本金有效时额外计算累计收益
+def compute_position(
+    report: FridayReport,
+    shares: float,
+    cost_amount: float,
+    current_nav: float = 0.0,
+) -> Position:
+    """按份额计算周五当日收益与当前市值
 
-    周五当日收益 = 份额 × (周五单位净值 - 周四单位净值)
-    当前市值     = 份额 × 周五单位净值
-    累计收益     = 当前市值 - 买入投入金额
+    周五当日收益 = 份额 × (官网周五净值 − 官网周四净值)   ← 自动抓取，不受配置影响
+    当前市值     = 份额 × 你配置的当前净值（未配置则回退到官网周五净值）
+    累计收益     = 当前市值 − 买入投入金额
     """
     has_shares = shares > 0
     has_cost = cost_amount > 0
@@ -426,12 +445,20 @@ def compute_position(report: FridayReport, shares: float, cost_amount: float) ->
         return Position(shares, cost_amount, has_shares, has_cost)
 
     friday_profit = shares * (report.nav_value - report.base_value)
-    market_value = shares * report.nav_value
+
+    if current_nav > 0:
+        nav_for_value = current_nav
+        nav_source = "你配置"
+    else:
+        nav_for_value = report.nav_value
+        nav_source = "官网周五净值"
+    market_value = shares * nav_for_value
     total_profit = market_value - cost_amount if has_cost else None
     total_return_pct = (total_profit / cost_amount * 100.0) if has_cost else None
     return Position(
         shares, cost_amount, has_shares, has_cost,
         friday_profit, market_value, total_profit, total_return_pct,
+        nav_for_value, nav_source,
     )
 
 
@@ -483,6 +510,9 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
         <p style="margin:6px 0 0;font-size:12px;color:#6b7280;">
           持有份额 {position.shares:,.2f} 份 × 每份净值变动 {report.change_value:+.6f} 元
         </p>
+        <p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">
+          当前净值 {position.current_nav:.6f}（{position.nav_source}）→ 市值 ¥{position.market_value:,.2f}
+        </p>
       </td></tr>
     </table>
   </td></tr>"""
@@ -494,13 +524,14 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;">
       <tr>
         <td width="33%" style="padding:14px;text-align:center;">
-          <p style="margin:0;font-size:12px;color:#6b7280;">持有份额 / 投入本金</p>
-          <p style="margin:5px 0 0;font-size:15px;font-weight:700;color:#1e293b;">{position.shares:,.2f} 份</p>
-          <p style="margin:3px 0 0;font-size:13px;color:#6b7280;">¥{position.cost_amount:,.2f}</p>
+          <p style="margin:0;font-size:12px;color:#6b7280;">当前净值（你配置）</p>
+          <p style="margin:5px 0 0;font-size:18px;font-weight:700;color:#1e293b;">{position.current_nav:.6f}</p>
+          <p style="margin:3px 0 0;font-size:13px;color:#6b7280;">{position.shares:,.2f} 份</p>
         </td>
         <td width="34%" style="padding:14px;text-align:center;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
           <p style="margin:0;font-size:12px;color:#6b7280;">当前市值</p>
           <p style="margin:5px 0 0;font-size:18px;font-weight:700;color:#1e293b;">¥{position.market_value:,.2f}</p>
+          <p style="margin:3px 0 0;font-size:13px;color:#6b7280;">本金 ¥{position.cost_amount:,.2f}</p>
         </td>
         <td width="33%" style="padding:14px;text-align:center;">
           <p style="margin:0;font-size:12px;color:#6b7280;">累计收益 / 收益率</p>
@@ -509,6 +540,9 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
         </td>
       </tr>
     </table>
+    <p style="margin:8px 0 0;font-size:12px;color:#9ca3af;line-height:1.6;">
+      口径：当前市值 = 份额 × 你配置的净值 {position.current_nav:.6f}；周五涨跌与当日收益由官网周五 / 周四净值自动计算。
+    </p>
   </td></tr>"""
         else:
             position_detail_html = ""
@@ -516,9 +550,10 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
         profit_html = f"""
   <tr><td style="padding:4px 40px 20px;">
     <div style="padding:14px 16px;border-radius:10px;background:#fffbeb;border-left:4px solid #f59e0b;color:#92400e;font-size:13px;line-height:1.7;">
-      💡 尚未配置持仓份额，暂无法计算周五收益。在 <code>fund_nav_notify.py</code> 配置区填写
-      <b>FUND_SHARES</b>（份额）与 <b>FUND_COST_AMOUNT</b>（买入金额），
-      或用环境变量 / GitHub Secrets 设置同名变量即可。
+      💡 尚未配置持仓，暂无法计算周五收益。在 <code>fund_nav_notify.py</code> 配置区填写
+      <b>CURRENT_NAV</b>（现在的净值）与 <b>FUND_SHARES</b>（现有份额），
+      可选填 <b>FUND_COST_AMOUNT</b>（买入本金，用于累计收益）。
+      也可用环境变量 / GitHub Secrets 设置同名变量。
     </div>
   </td></tr>"""
         position_detail_html = ""
@@ -690,6 +725,7 @@ def record_sent(state: Dict, report: FridayReport, position: Position) -> None:
     state["last_sent_change_pct"] = report.change_pct
     state["last_sent_friday_profit"] = position.friday_profit
     state["last_sent_shares"] = position.shares
+    state["last_sent_current_nav"] = position.current_nav
     state["last_sent_at"] = now
     history = state.get("history") or []
     history.append({
@@ -717,6 +753,7 @@ def main() -> int:
     parser.add_argument("--date", help="指定目标周五（YYYY-MM-DD），用于补发或测试")
     parser.add_argument("--shares", type=float, help="临时覆盖持有份额（试算用，不修改配置）")
     parser.add_argument("--cost", type=float, help="临时覆盖买入金额（元，试算用）")
+    parser.add_argument("--nav", type=float, help="临时覆盖「现在的净值」（试算用）")
     args = parser.parse_args()
 
     if not ENABLE_FUND_NAV_NOTIFY:
@@ -746,19 +783,21 @@ def main() -> int:
         print(f"[info] 状态 {report.status}：{report.note}")
         return 0
 
-    shares, cost_amount = resolve_position(args.shares, args.cost)
-    position = compute_position(report, shares, cost_amount)
+    shares, cost_amount, current_nav = resolve_position(args.shares, args.cost, args.nav)
+    position = compute_position(report, shares, cost_amount, current_nav)
 
     print(f"[info] 状态 {report.status}；净值日 {report.nav_date} = {report.nav_value:.6f}；"
           f"基准日 {report.base_date}（{'周四' if report.base_is_thursday else '顺延'}）= {report.base_value:.6f}；"
           f"涨跌 {report.change_value:+.6f}（{_fmt_pct(report.change_pct)}）")
+    if position.current_nav is not None and position.market_value is not None:
+        print(f"[info] 持仓配置：当前净值 {position.current_nav:.6f}（{position.nav_source}）"
+              f" × 份额 {shares:,.2f} = 市值 {position.market_value:,.2f} 元")
     if position.has_shares and position.friday_profit is not None:
         print(f"[info] 周五当日收益：{position.friday_profit:+,.2f} 元（份额 {shares:,.2f} 份）")
         if position.total_profit is not None:
-            print(f"[info] 当前市值 {position.market_value:,.2f} 元；"
-                  f"累计收益 {position.total_profit:+,.2f} 元（{position.total_return_pct:+.2f}%）")
+            print(f"[info] 累计收益 {position.total_profit:+,.2f} 元（{position.total_return_pct:+.2f}%）")
     else:
-        print("[info] 未配置持有份额，邮件将提示填写 FUND_SHARES / FUND_COST_AMOUNT")
+        print("[info] 未配置持有份额，邮件将提示填写 CURRENT_NAV / FUND_SHARES")
     if args.check:
         print("[info] --check 模式，不发送邮件。")
         return 0
