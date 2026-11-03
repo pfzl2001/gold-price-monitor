@@ -5,8 +5,7 @@ on:
   repository_dispatch:
     types: [trigger-monitor]
   schedule:
-    # 备份：每小时运行一次，北京时间工作日 9:00-23:00
-    # 仅在外部触发失效时作为兜底
+    # 兜底：工作日北京时间 9:00-23:00 每小时一次
     - cron: "0 1-15 * * 1-5"
   workflow_dispatch: {}
 
@@ -32,9 +31,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # 金价监控开关来自 monitor.py 的 ENABLE_GOLD_MONITOR（唯一控制点）。
-      # 开关为 False 时跳过全部金价步骤：不采集、不分析、不写日志、不发邮件。
-      # 需要恢复监控时，只需把 monitor.py 里的开关改成 True。
+      # 开关来自 monitor.py 的 ENABLE_GOLD_MONITOR；为 False 时跳过全部金价步骤。
       - name: Read gold monitor switch
         id: gold_switch
         run: |
@@ -52,7 +49,6 @@ jobs:
           GOLD_TZ: "Asia/Shanghai"
           GOLD_CODE: "CZB-JCJ"
           TRUST_ENV: "0"
-          # monitor.py 只负责获取和记录价格，邮件通知由下面的 buy_strategy.py 处理（带防刷屏限制）
         run: python monitor.py
 
       - name: Run buy strategy analysis
@@ -63,7 +59,6 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_SUBJECT: "🔔 金价买入提醒"
-          # 防刷屏通知策略参数
           NOTIFY_COOLDOWN_HOURS: "2"    # 两次通知之间最少间隔（小时）
           NOTIFY_DROP_PCT: "0.5"        # 价格需比上次通知价低多少%才再次通知
         run: python buy_strategy.py > buy_strategy.log 2>&1 || true
@@ -82,9 +77,10 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add monitor.log buy_strategy.log
+          # 日志是策略分析的历史数据源；被 .gitignore 忽略，恢复监控时需 -f 强制入库
+          git add -f monitor.log buy_strategy.log 2>/dev/null || true
           if [ -f buy_notify_state.json ]; then
-            git add buy_notify_state.json
+            git add -f buy_notify_state.json
           fi
           git diff --staged --quiet || git commit -m "📊 Update gold price log [skip ci]"
           for i in 1 2 3 4 5; do

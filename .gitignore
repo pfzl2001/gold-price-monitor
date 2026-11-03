@@ -1,13 +1,13 @@
-# Logs (may contain runtime sensitive data)
-monitor.log
-buy_strategy.log
-
-# 本地 dry-run 生成的基金净值邮件预览（非交付物）
+# 运行时产物（不入库）
+*.log
+buy_notify_state*.json
 fund_nav_preview.html
+
+# OneDrive / 多设备同步产生的冲突副本
+*-DESKTOP-*
 
 # 本地 AI 协作工作记忆（不入库）
 .workbuddy/
-
 
 # Strategy config (may contain personal thresholds)
 strategy_config.json

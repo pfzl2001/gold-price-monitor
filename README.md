@@ -35,10 +35,7 @@ gold-price-monitor/
 │   └── workflows/
 │       ├── gold_price_monitor.yml   # 金价监控工作流（读取 py 开关决定是否执行）
 │       └── fund_nav_notify.yml      # 基金净值播报工作流（周六查询周五数据）
-├── monitor.log              # 历史金价数据日志（运行时自动生成）
-├── buy_strategy.log         # 策略分析输出日志（运行时自动生成）
-├── buy_notify_state.json    # 金价通知状态文件（运行时自动生成）
-└── fund_nav_state.json      # 基金播报防重复状态（运行时自动生成，由 Actions 提交）
+└── fund_nav_state.json      # 基金播报防重复状态（由 Actions 提交）
 ```
 
 ---
@@ -69,7 +66,7 @@ gold-price-monitor/
 4. **完成！** 基金净值播报会在每周六（含周日 / 周一补发窗口）自动发送；金价工作流仍按原调度触发，但当前开关为关闭状态，会立即退出、不产生任何请求与邮件（如需恢复见下方开关章节）。
 
 > [!TIP]
-> 如果不需要邮件通知，可以不配置任何 Secrets，系统仍会正常采集金价并生成策略分析报告。
+> 金价链路当前由 `ENABLE_GOLD_MONITOR = False` 关闭，工作流触发后会立即退出、不产生采集与邮件；基金净值播报不受影响，但仍需 `SMTP_PASS` / `SENDER_EMAIL` / `EMAIL_TO` 才能发信。
 
 ---
 
@@ -169,16 +166,15 @@ ENABLE_GOLD_MONITOR = False   # 当前：停止监控
 
 ```python
 # ================= 全局个性化设置 =================
-# 您的实际黄金持仓成本价（元/克），支持浮点数（如 558.5）。如果未买入，请设置为 None 或 0.0
-GOLD_COST = None
+GOLD_COST = None  # 实际黄金持仓成本价（元/克）；未买入填 None 或 0.0
 
-# 是否启用邮件通知。如果设为 False，系统将完全不会发送任何提醒邮件
-ENABLE_EMAIL_NOTIFICATION = True
+# 仅作用于金价提醒的包装函数，不影响 fund_nav_notify.py 的基金播报
+ENABLE_EMAIL_NOTIFICATION = False
 # ==================================================
 ```
 
 - **修改持仓成本**：将 `GOLD_COST = None` 改为如 `GOLD_COST = 560.5`
-- **关闭邮件通知**：将 `ENABLE_EMAIL_NOTIFICATION` 设为 `False`
+- **恢复金价邮件提醒**：将 `ENABLE_EMAIL_NOTIFICATION` 设为 `True`（基金播报不受影响）
 
 ### 方式二：通过 `strategy_config.json`
 

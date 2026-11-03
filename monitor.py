@@ -17,11 +17,8 @@ DEFAULT_GOLD_CODE = "CZB-JCJ"
 DEFAULT_TZ = "Asia/Shanghai"
 
 # ================= 金价监控总开关（唯一控制点） =================
-# True  = 正常采集金价、写入 monitor.log，并由 buy_strategy.py 执行分析与邮件提醒
-# False = 停止金价监控：不请求接口、不写日志、不分析、不发送任何金价邮件
-#
-# 说明：buy_strategy.py 直接复用本开关，因此只需修改这一处即可控制整套金价监控。
-#       当前为 False（已按需求停止监控）；需要恢复时改成 True 即可。
+# True  = 采集金价 / 写日志 / 策略分析 / 邮件提醒
+# False = 全部跳过。buy_strategy.py 与工作流均读取本开关，改这一处即可。
 ENABLE_GOLD_MONITOR = False
 # ==============================================================
 
@@ -63,7 +60,6 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _now_in_timezone(tz_name: str) -> datetime:
-    # Python 3.11 has zoneinfo in stdlib.
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo(tz_name))
@@ -71,9 +67,7 @@ def _now_in_timezone(tz_name: str) -> datetime:
 
 def _build_session() -> requests.Session:
     session = requests.Session()
-    # On some machines, HTTPS_PROXY/HTTP_PROXY is set (e.g. to 127.0.0.1:7890).
-    # That breaks both local runs (if the proxy isn't running) and GitHub Actions.
-    # Default to ignoring env proxy settings unless explicitly enabled.
+    # 默认忽略环境代理：本机代理未运行或 CI 环境下会导致请求失败，需 TRUST_ENV=1 才启用
     session.trust_env = os.getenv("TRUST_ENV", "").strip().lower() in {"1", "true", "yes"}
     retry = Retry(
         total=3,

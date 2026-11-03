@@ -49,7 +49,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -68,30 +68,18 @@ DISPLAY_URL = f"https://www.hsbankwm.com/lccs_display.php?id={PRODUCT_ID}"
 HISTORY_URL = f"https://www.hsbankwm.com/lccs_income_list.php?id={PRODUCT_ID}"
 JSON_API = "https://www.hsbankwm.com/lccs_income.php"
 
-DEFAULT_TZ = "Asia/Shanghai"
-# 使用固定 UTC+8 时区：中国自 1991 年起不再实行夏令时，与 Asia/Shanghai 等价。
-# 固定偏移不依赖 Windows 上的系统 tzdata，保证本地与 GitHub Actions 均可直接运行。
+# 固定 UTC+8：不依赖 Windows 系统 tzdata，本地与 Actions 均可直接运行
 BEIJING_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 TIMEOUT_SECONDS = 20
 
 # 基金净值播报独立开关，与金价监控开关（monitor.py 的 ENABLE_GOLD_MONITOR）互不干扰
 ENABLE_FUND_NAV_NOTIFY = True
 
-# ---- 持仓配置（由你维护：从 App 抄这两个数字） ----
-# 现在的单位净值。截图为 2026-11-02 的 1.068775；净值更新后改这里
-CURRENT_NAV = 1.068775
-# 现有的持有份额（份）
-FUND_SHARES = 84838.37
-# 买入投入金额（元，本金）；可选，用于累计收益。由 90,673.13 − 97.13 反推
-FUND_COST_AMOUNT = 90576.00
-#
-# 两类净值口径（重要）：
-#   · 周五涨跌 / 周五当日收益 = 官网抓取的 (周五净值 − 周四净值) × 份额，自动计算；
-#   · 当前市值 / 累计收益 = 你配置的 CURRENT_NAV × 份额 − 本金，与 App 对齐。
-# 优先级：命令行 --nav / --shares / --cost > 环境变量或 Secrets > 上面三个常量。
-# 环境变量名：CURRENT_NAV、FUND_SHARES、FUND_COST_AMOUNT（可用 GitHub Secrets 注入）。
-# 注意：数值写进本文件并提交到公开仓库会公开持仓信息，建议改用 Secrets。
-# --------------------------------------------------------
+# ---- 持仓配置（由你维护：从 App 抄录，净值变动或加仓 / 赎回后更新） ----
+CURRENT_NAV = 1.068775        # 现在的单位净值，用于计算市值 / 累计收益
+FUND_SHARES = 84838.37        # 现有的持有份额（份）
+FUND_COST_AMOUNT = 90576.00   # 买入本金（可选，用于累计收益）
+# 口径与优先级见模块顶部说明；公开仓库提交持仓数值会泄露信息，建议改用同名 Secrets。
 
 # 颜色遵循 A 股 / 国内理财习惯：红涨绿跌
 COLOR_UP = "#d92b2b"
@@ -142,19 +130,11 @@ class FridayReport:
     week_base_value: Optional[float] = None
     week_change_pct: Optional[float] = None
     note: str = ""
-    recent: List[NavRow] = None     # type: ignore[assignment]
-    week_rows: List[NavRow] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.recent is None:
-            self.recent = []
-        if self.week_rows is None:
-            self.week_rows = []
+    recent: List[NavRow] = field(default_factory=list)
+    week_rows: List[NavRow] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# 数据获取与清洗
-# ---------------------------------------------------------------------------
+# --- 数据获取与清洗 ---
 
 def _build_session() -> requests.Session:
     session = requests.Session()
@@ -276,9 +256,7 @@ def to_points(nav_map: Dict[date, float]) -> List[NavPoint]:
     return [NavPoint(d, v) for d, v in sorted(nav_map.items()) if v > 0]
 
 
-# ---------------------------------------------------------------------------
-# 周五逻辑
-# ---------------------------------------------------------------------------
+# --- 周五逻辑 ---
 
 def resolve_target_friday(today: date, override: Optional[str] = None) -> date:
     """确定本次播报归属的周五：最近一个已到来的周五（今天若是周五则取今天）"""
@@ -379,9 +357,7 @@ def build_report(points: List[NavPoint], target_friday: date) -> FridayReport:
     return report
 
 
-# ---------------------------------------------------------------------------
-# 持仓与收益
-# ---------------------------------------------------------------------------
+# --- 持仓与收益 ---
 
 @dataclass(frozen=True)
 class Position:
@@ -462,16 +438,14 @@ def compute_position(
     )
 
 
-# ---------------------------------------------------------------------------
-# 邮件
-# ---------------------------------------------------------------------------
+# --- 邮件 ---
 
-def _color_and_arrow(pct: Optional[float]) -> Tuple[str, str]:
-    if pct is None:
+def _color_and_arrow(value: Optional[float]) -> Tuple[str, str]:
+    if value is None:
         return COLOR_FLAT, "—"
-    if pct > 0:
+    if value > 0:
         return COLOR_UP, "▲"
-    if pct < 0:
+    if value < 0:
         return COLOR_DOWN, "▼"
     return COLOR_FLAT, "—"
 
@@ -486,7 +460,6 @@ def _fmt_value(value: Optional[float]) -> str:
 
 def build_email_html(report: FridayReport, source_name: str, position: Position) -> str:
     """生成与项目现有邮件风格一致的 HTML 报告"""
-    pct = report.change_pct or 0.0
     color, arrow = _color_and_arrow(report.change_pct)
     safe_name = html_lib.escape(PRODUCT_NAME)
     safe_note = html_lib.escape(report.note)
@@ -498,7 +471,7 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
         f"{report.change_value:+.6f}" if report.change_value is not None else "—"
     )
 
-    # ---- 周五收益卡片（用户最关心，放在净值大卡片之后） ----
+    # ---- 周五收益卡片 ----
     if position.has_shares and position.friday_profit is not None:
         pc, pa = _color_and_arrow(position.friday_profit)
         profit_html = f"""
@@ -547,7 +520,7 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
         else:
             position_detail_html = ""
     else:
-        profit_html = f"""
+        profit_html = """
   <tr><td style="padding:4px 40px 20px;">
     <div style="padding:14px 16px;border-radius:10px;background:#fffbeb;border-left:4px solid #f59e0b;color:#92400e;font-size:13px;line-height:1.7;">
       💡 尚未配置持仓，暂无法计算周五收益。在 <code>fund_nav_notify.py</code> 配置区填写
@@ -684,7 +657,7 @@ def build_email_html(report: FridayReport, source_name: str, position: Position)
 
 
 def build_subject(report: FridayReport, position: Position) -> str:
-    arrow = "▲" if (report.change_pct or 0) > 0 else ("▼" if (report.change_pct or 0) < 0 else "—")
+    _, arrow = _color_and_arrow(report.change_pct)
     profit_part = ""
     if position.has_shares and position.friday_profit is not None:
         profit_part = f" | 周五收益 {position.friday_profit:+,.2f} 元"
@@ -695,9 +668,7 @@ def build_subject(report: FridayReport, position: Position) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# 状态（防止同一周五重复发送）
-# ---------------------------------------------------------------------------
+# --- 状态（防止同一周五重复发送） ---
 
 def load_state() -> Dict:
     if not STATE_PATH.exists():
@@ -741,9 +712,7 @@ def record_sent(state: Dict, report: FridayReport, position: Position) -> None:
     save_state(state)
 
 
-# ---------------------------------------------------------------------------
-# 主流程
-# ---------------------------------------------------------------------------
+# --- 主流程 ---
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="基金净值周五播报")

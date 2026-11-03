@@ -1,14 +1,6 @@
 """
 金价买入策略分析工具
 基于多种技术指标判断当前是否适合买入
-
-策略说明:
-1. 价格阈值策略 - 低于阈值（如1000元）就买入（硬性条件）
-2. 目标价策略 - 低于设定目标价就买入（理想价位）
-3. 日跌幅策略 - 当日跌幅超过阈值可能超卖
-4. 均线策略 - 价格低于N日均线时买入
-5. RSI策略 - RSI低于30认为超卖
-6. 回调策略 - 从近期高点回调一定比例时买入
 """
 from __future__ import annotations
 
@@ -17,7 +9,7 @@ import os
 import sys
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, date, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from enum import Enum
@@ -38,16 +30,12 @@ from monitor import (
 )
 
 # ================= 全局个性化设置 =================
-# 您的实际黄金持仓成本价（元/克），支持浮点数（如 558.5）。如果未买入，请设置为 None 或 0.0
-GOLD_COST = None
+GOLD_COST = None  # 实际黄金持仓成本价（元/克）；未买入填 None 或 0.0
 
-# 是否启用邮件通知。如果设为 False，系统将完全不会发送任何提醒邮件
-# （远程已设为 False，保持；该开关仅作用于金价提醒的包装函数，不影响基金播报）
+# 仅作用于金价提醒的包装函数，不影响 fund_nav_notify.py 的基金播报
 ENABLE_EMAIL_NOTIFICATION = False
 
-# 金价监控总开关来自 monitor.py 的 ENABLE_GOLD_MONITOR，不在本文件重复定义。
-# 关闭时本脚本会直接退出（不发邮件）；开启时恢复原有策略分析与提醒。
-# 注意：基金净值播报（fund_nav_notify.py）不受此开关影响，独立运行。
+# 金价总开关来自 monitor.py 的 ENABLE_GOLD_MONITOR：关闭时本脚本直接退出。
 # ==================================================
 
 
@@ -199,7 +187,6 @@ class BuyStrategyConfig:
                 print(f"[warn] 加载配置失败: {e}, 使用默认配置")
         
         # 始终从文件头部的全局配置变量读取实际持仓成本
-        global GOLD_COST
         if GOLD_COST is not None and GOLD_COST > 0:
             config.actual_cost = float(GOLD_COST)
             print(f"[info] 已成功从文件头部全局变量加载实际持仓成本: {config.actual_cost} 元/克")
@@ -1225,7 +1212,6 @@ class BuyStrategyAnalyzer:
 
     def send_actual_cost_notification(self, analysis: Dict[str, Any]) -> bool:
         """发送实际成本策略邮件提醒（已持仓模式 - HTML 邮件）"""
-        global ENABLE_EMAIL_NOTIFICATION
         if not ENABLE_EMAIL_NOTIFICATION:
             print("[info] [成本策略] 邮件通知已关闭，跳过发送成本策略提醒。")
             return False
@@ -1681,7 +1667,6 @@ class BuyStrategyAnalyzer:
 
     def send_buy_notification(self, result: Dict[str, Any]) -> bool:
         """当建议买入时发送邮件通知（未持仓模式）"""
-        global ENABLE_EMAIL_NOTIFICATION
         if not ENABLE_EMAIL_NOTIFICATION:
             print("[info] 邮件通知已关闭，跳过发送常规买入提醒。")
             return False
@@ -1854,7 +1839,6 @@ class BuyStrategyAnalyzer:
         """
         发送高频量化策略对应的邮件通知
         """
-        global ENABLE_EMAIL_NOTIFICATION
         if not ENABLE_EMAIL_NOTIFICATION:
             print("[info] 邮件通知已关闭，跳过发送高频策略提醒。")
             return False
