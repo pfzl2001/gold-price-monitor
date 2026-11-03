@@ -1,16 +1,27 @@
 """
-基金净值周五播报
-================
+基金净值周五播报（周六查询）
+============================
 
-每周五把「徽银理财“安盈”稳健最低持有30天理财产品」的单位净值，
-以及相对**上一个净值公布日**（通常是周四）的涨跌额 / 涨跌幅，
-通过项目内已有的 Resend SMTP 邮件路径发送给 EMAIL_TO 指定的收件人。
+每周六查询上周五「徽银理财“安盈”稳健最低持有30天理财产品」的单位净值，
+计算其相对**周四**净值的涨跌额 / 涨跌幅，并结合持仓份额与买入金额，
+直接给出**周五当日收益（元）**，通过项目内已有的 Resend SMTP 路径发送邮件。
 
-关于「前一天」的说明
---------------------
-银行理财净值只在净值公布日更新（工作日，遇节假日顺延），周末与节假日没有净值。
-因此本脚本的对比基准是「上一个净值公布日」而非自然日的前一天；
-邮件中会明确写出基准日期与基准净值，避免歧义。
+为什么在周六查
+--------------
+银行理财净值多为 T+1 披露，周五当晚通常查不到周五净值；周六查询可确保拿到
+周五数据。工作流以周六为主触发，周日 / 周一仅作延迟补发兜底。
+
+关于「相较周四」
+----------------
+对比基准固定取同一周的**周四**净值。若周四恰逢节假日无净值公布，则顺延至
+周五之前最近的一个净值日，并在邮件中明确标注基准日期，避免歧义。
+
+持仓配置
+--------
+在下方「配置区」填写 FUND_SHARES（持有份额）与 FUND_COST_AMOUNT（买入金额 / 本金），
+也可用环境变量或 GitHub Secrets FUND_SHARES、FUND_COST_AMOUNT 覆盖
+（公开仓库推荐用 Secrets，避免持仓金额入库）。命令行 --shares / --cost 可临时试算。
+只填份额即可算出「周五当日收益」；填了本金才额外给出「累计收益 / 收益率」。
 
 数据源：徽银理财官网公开净值接口（与 lccs_display.php?id=17222 页面同源）
 主接口：lccs_income.php?fundCode=...&dateType=all   （JSON，全量历史）
@@ -18,9 +29,10 @@
 
 用法
 ----
-    python fund_nav_notify.py                        # 正常运行（每周五由 Actions 触发）
+    python fund_nav_notify.py                        # 正常运行（每周六由 Actions 触发）
     python fund_nav_notify.py --dry-run              # 只生成报告与预览，不发送邮件
     python fund_nav_notify.py --date 2026-10-30     # 指定目标周五（补发 / 测试）
+    python fund_nav_notify.py --shares 100000 --cost 106000 --dry-run   # 试算收益
     python fund_nav_notify.py --force               # 忽略防重复记录，强制发送
     python fund_nav_notify.py --check               # 只检查净值是否已公布，不发邮件
 """
@@ -59,6 +71,19 @@ TIMEOUT_SECONDS = 20
 
 # 基金净值播报独立开关，与金价监控开关（monitor.py 的 ENABLE_GOLD_MONITOR）互不干扰
 ENABLE_FUND_NAV_NOTIFY = True
+
+# ---- 持仓配置：填好后邮件会直接告诉你周五赚了多少钱 ----
+# 持有份额（份），例如 100000.00
+FUND_SHARES = 0.0
+# 买入投入金额（元，本金），例如 106000.00
+FUND_COST_AMOUNT = 0.0
+#
+# 优先级：命令行 --shares / --cost > 环境变量或 GitHub Secrets > 上面两个常量。
+# 注意：直接把金额写进本文件并提交到公开仓库会公开持仓信息。更稳妥的做法是
+#       保持这里为 0.0，在仓库 Settings → Secrets 里配置 FUND_SHARES /
+#       FUND_COST_AMOUNT（工作流会自动注入为环境变量）。
+# 只填份额就能算出「周五当日收益」；填了本金才额外给出「累计收益 / 收益率」。
+# --------------------------------------------------------
 
 # 颜色遵循 A 股 / 国内理财习惯：红涨绿跌
 COLOR_UP = "#d92b2b"
@@ -102,6 +127,7 @@ class FridayReport:
     nav_value: Optional[float] = None
     base_date: Optional[date] = None
     base_value: Optional[float] = None
+    base_is_thursday: bool = True       # 基准是否确为周四（False 表示顺延到了最近净值日）
     change_value: Optional[float] = None
     change_pct: Optional[float] = None
     week_base_date: Optional[date] = None
@@ -258,7 +284,7 @@ def _pct(cur: float, prev: float) -> float:
 
 
 def build_report(points: List[NavPoint], target_friday: date) -> FridayReport:
-    """计算目标周五净值相对上一净值日的涨跌幅"""
+    """计算目标周五净值相对**周四**的涨跌幅（周四无净值时顺延）"""
     nav_map = {p.day: p.value for p in points}
     dates = [p.day for p in points]
     latest = dates[-1]
@@ -299,7 +325,21 @@ def build_report(points: List[NavPoint], target_friday: date) -> FridayReport:
         return report
 
     nav_value = nav_map[nav_date]
-    base_date = dates[idx - 1]
+
+    # 对比基准固定为同一周的周四（目标周五的前一个自然日）。
+    # 周四恰逢节假日 / 暂停披露而无净值时，顺延到周五之前最近的净值日，并明确标注。
+    thursday = target_friday - timedelta(days=1)
+    if thursday in nav_map and thursday < nav_date:
+        base_date = thursday
+        report.base_is_thursday = True
+    else:
+        base_date = dates[idx - 1]
+        report.base_is_thursday = False
+        fallback_note = (
+            f"周四 {thursday.isoformat()} 无净值公布，对比基准顺延至最近净值日 "
+            f"{base_date.isoformat()}。"
+        )
+        report.note = (report.note + " " + fallback_note).strip()
     base_value = nav_map[base_date]
 
     report.nav_date = nav_date
@@ -332,6 +372,70 @@ def build_report(points: List[NavPoint], target_friday: date) -> FridayReport:
 
 
 # ---------------------------------------------------------------------------
+# 持仓与收益
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Position:
+    """持仓配置及由净值推导出的收益（单位：元）"""
+    shares: float
+    cost_amount: float
+    has_shares: bool
+    has_cost: bool
+    friday_profit: Optional[float] = None       # 周五当日收益（相对周四）
+    market_value: Optional[float] = None        # 当前市值
+    total_profit: Optional[float] = None        # 累计收益
+    total_return_pct: Optional[float] = None    # 累计收益率，%
+
+
+def _env_float(name: str) -> Optional[float]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[warn] 环境变量 {name} 不是有效数字：{raw!r}，已忽略")
+        return None
+
+
+def resolve_position(
+    shares_override: Optional[float] = None,
+    cost_override: Optional[float] = None,
+) -> Tuple[float, float]:
+    """解析持仓配置，优先级：命令行参数 > 环境变量 / Secrets > py 配置区常量"""
+    shares = shares_override if shares_override is not None else _env_float("FUND_SHARES")
+    cost = cost_override if cost_override is not None else _env_float("FUND_COST_AMOUNT")
+    if shares is None:
+        shares = FUND_SHARES
+    if cost is None:
+        cost = FUND_COST_AMOUNT
+    return float(shares or 0.0), float(cost or 0.0)
+
+
+def compute_position(report: FridayReport, shares: float, cost_amount: float) -> Position:
+    """按持有份额计算周五当日收益；本金有效时额外计算累计收益
+
+    周五当日收益 = 份额 × (周五单位净值 - 周四单位净值)
+    当前市值     = 份额 × 周五单位净值
+    累计收益     = 当前市值 - 买入投入金额
+    """
+    has_shares = shares > 0
+    has_cost = cost_amount > 0
+    if not has_shares or report.nav_value is None or report.base_value is None:
+        return Position(shares, cost_amount, has_shares, has_cost)
+
+    friday_profit = shares * (report.nav_value - report.base_value)
+    market_value = shares * report.nav_value
+    total_profit = market_value - cost_amount if has_cost else None
+    total_return_pct = (total_profit / cost_amount * 100.0) if has_cost else None
+    return Position(
+        shares, cost_amount, has_shares, has_cost,
+        friday_profit, market_value, total_profit, total_return_pct,
+    )
+
+
+# ---------------------------------------------------------------------------
 # 邮件
 # ---------------------------------------------------------------------------
 
@@ -353,18 +457,71 @@ def _fmt_value(value: Optional[float]) -> str:
     return "—" if value is None else f"{value:.6f}"
 
 
-def build_email_html(report: FridayReport, source_name: str) -> str:
+def build_email_html(report: FridayReport, source_name: str, position: Position) -> str:
     """生成与项目现有邮件风格一致的 HTML 报告"""
     pct = report.change_pct or 0.0
     color, arrow = _color_and_arrow(report.change_pct)
     safe_name = html_lib.escape(PRODUCT_NAME)
     safe_note = html_lib.escape(report.note)
     weekday_cn = "一二三四五六日"[report.target_friday.weekday()]
+    base_label = "周四" if report.base_is_thursday else "最近净值日"
 
     change_color, _ = _color_and_arrow(report.change_value)
     change_text = (
         f"{report.change_value:+.6f}" if report.change_value is not None else "—"
     )
+
+    # ---- 周五收益卡片（用户最关心，放在净值大卡片之后） ----
+    if position.has_shares and position.friday_profit is not None:
+        pc, pa = _color_and_arrow(position.friday_profit)
+        profit_html = f"""
+  <tr><td style="padding:4px 40px 8px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;">
+      <tr><td style="padding:20px;text-align:center;">
+        <p style="margin:0;font-size:13px;color:#6b7280;letter-spacing:0.5px;">💰 周五当日收益（对比{base_label}）</p>
+        <p style="margin:6px 0 0;font-size:36px;font-weight:800;color:{pc};line-height:1.1;">{pa} ¥{position.friday_profit:+,.2f}</p>
+        <p style="margin:6px 0 0;font-size:12px;color:#6b7280;">
+          持有份额 {position.shares:,.2f} 份 × 每份净值变动 {report.change_value:+.6f} 元
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>"""
+
+        if position.has_cost and position.total_profit is not None:
+            tc, ta = _color_and_arrow(position.total_profit)
+            position_detail_html = f"""
+  <tr><td style="padding:0 40px 20px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;">
+      <tr>
+        <td width="33%" style="padding:14px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#6b7280;">持有份额 / 投入本金</p>
+          <p style="margin:5px 0 0;font-size:15px;font-weight:700;color:#1e293b;">{position.shares:,.2f} 份</p>
+          <p style="margin:3px 0 0;font-size:13px;color:#6b7280;">¥{position.cost_amount:,.2f}</p>
+        </td>
+        <td width="34%" style="padding:14px;text-align:center;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
+          <p style="margin:0;font-size:12px;color:#6b7280;">当前市值</p>
+          <p style="margin:5px 0 0;font-size:18px;font-weight:700;color:#1e293b;">¥{position.market_value:,.2f}</p>
+        </td>
+        <td width="33%" style="padding:14px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#6b7280;">累计收益 / 收益率</p>
+          <p style="margin:5px 0 0;font-size:18px;font-weight:700;color:{tc};">{ta} ¥{position.total_profit:+,.2f}</p>
+          <p style="margin:3px 0 0;font-size:13px;color:{tc};">{position.total_return_pct:+.2f}%</p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>"""
+        else:
+            position_detail_html = ""
+    else:
+        profit_html = f"""
+  <tr><td style="padding:4px 40px 20px;">
+    <div style="padding:14px 16px;border-radius:10px;background:#fffbeb;border-left:4px solid #f59e0b;color:#92400e;font-size:13px;line-height:1.7;">
+      💡 尚未配置持仓份额，暂无法计算周五收益。在 <code>fund_nav_notify.py</code> 配置区填写
+      <b>FUND_SHARES</b>（份额）与 <b>FUND_COST_AMOUNT</b>（买入金额），
+      或用环境变量 / GitHub Secrets 设置同名变量即可。
+    </div>
+  </td></tr>"""
+        position_detail_html = ""
 
     # 本周 / 近 8 个净值日表格
     def table_rows(rows: List[NavRow]) -> str:
@@ -412,7 +569,7 @@ def build_email_html(report: FridayReport, source_name: str) -> str:
     <p style="margin:0;font-size:13px;color:#94a3b8;letter-spacing:1px;">WEEKLY NAV REPORT</p>
     <h1 style="margin:8px 0 0;color:#ffffff;font-size:22px;font-weight:700;">📈 每周五基金净值播报</h1>
     <p style="margin:10px 0 0;color:#cbd5e1;font-size:14px;">{safe_name}</p>
-    <p style="margin:4px 0 0;color:#94a3b8;font-size:12px;">产品代码 {FUND_CODE} · 归属周 {report.target_friday.isoformat()}（周{weekday_cn}）</p>
+    <p style="margin:4px 0 0;color:#94a3b8;font-size:12px;">产品代码 {FUND_CODE} · 归属周 {report.target_friday.isoformat()}（周{weekday_cn}）· 周六查询（T+1 披露）</p>
   </td></tr>
 
   <tr><td style="padding:28px 40px 8px;text-align:center;">
@@ -423,14 +580,17 @@ def build_email_html(report: FridayReport, source_name: str) -> str:
         {arrow} {_fmt_pct(report.change_pct)}
       </span>
     </p>
-    <p style="margin:8px 0 0;font-size:13px;color:{change_color};font-weight:600;">较上一净值日 {change_text}</p>
+    <p style="margin:8px 0 0;font-size:13px;color:{change_color};font-weight:600;">较{base_label} {change_text}</p>
   </td></tr>
+
+  {profit_html}
+  {position_detail_html}
 
   <tr><td style="padding:24px 40px 20px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border-radius:12px;">
       <tr>
         <td width="50%" style="padding:16px 20px;text-align:center;border-right:1px solid #e5e7eb;">
-          <p style="margin:0;font-size:12px;color:#6b7280;">对比基准日（上一净值公布日）</p>
+          <p style="margin:0;font-size:12px;color:#6b7280;">对比基准日（{base_label}）</p>
           <p style="margin:6px 0 0;font-size:16px;font-weight:700;color:#1e293b;">{report.base_date.isoformat() if report.base_date else '—'}</p>
           <p style="margin:4px 0 0;font-size:13px;color:#6b7280;">净值 {_fmt_value(report.base_value)}</p>
         </td>
@@ -442,7 +602,7 @@ def build_email_html(report: FridayReport, source_name: str) -> str:
       </tr>
     </table>
     <p style="margin:10px 0 0;font-size:12px;color:#9ca3af;line-height:1.6;">
-      说明：银行理财净值仅在净值公布日更新（工作日，遇节假日顺延），因此「前一天」按<strong>上一个净值公布日</strong>计算，而非自然日前一天。
+      说明：按设定，周五涨跌以<strong>周四</strong>净值为基准计算；周四无净值公布时顺延至最近净值日并在上方提示。周五净值通常于周六披露，故本邮件在周六发送。
     </p>
   </td></tr>
 
@@ -488,11 +648,15 @@ def build_email_html(report: FridayReport, source_name: str) -> str:
 </html>""".strip()
 
 
-def build_subject(report: FridayReport) -> str:
+def build_subject(report: FridayReport, position: Position) -> str:
     arrow = "▲" if (report.change_pct or 0) > 0 else ("▼" if (report.change_pct or 0) < 0 else "—")
+    profit_part = ""
+    if position.has_shares and position.friday_profit is not None:
+        profit_part = f" | 周五收益 {position.friday_profit:+,.2f} 元"
     return (
         f"📈 周五净值播报 {report.target_friday.isoformat()} | "
         f"{FUND_CODE} 净值 {_fmt_value(report.nav_value)} {arrow} {_fmt_pct(report.change_pct)}"
+        f"{profit_part}"
     )
 
 
@@ -517,19 +681,24 @@ def save_state(state: Dict) -> None:
     tmp.replace(STATE_PATH)
 
 
-def record_sent(state: Dict, report: FridayReport) -> None:
+def record_sent(state: Dict, report: FridayReport, position: Position) -> None:
     now = datetime.now(BEIJING_TZ).isoformat(sep=" ", timespec="seconds")
     state["last_sent_friday"] = report.target_friday.isoformat()
     state["last_sent_nav_date"] = report.nav_date.isoformat() if report.nav_date else None
     state["last_sent_nav_value"] = report.nav_value
+    state["last_sent_base_date"] = report.base_date.isoformat() if report.base_date else None
     state["last_sent_change_pct"] = report.change_pct
+    state["last_sent_friday_profit"] = position.friday_profit
+    state["last_sent_shares"] = position.shares
     state["last_sent_at"] = now
     history = state.get("history") or []
     history.append({
         "friday": report.target_friday.isoformat(),
         "nav_date": report.nav_date.isoformat() if report.nav_date else None,
+        "base_date": report.base_date.isoformat() if report.base_date else None,
         "nav_value": report.nav_value,
         "change_pct": report.change_pct,
+        "friday_profit": position.friday_profit,
         "sent_at": now,
     })
     state["history"] = history[-20:]
@@ -546,6 +715,8 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="忽略防重复记录，强制发送")
     parser.add_argument("--check", action="store_true", help="只检查净值是否已公布，不发送邮件")
     parser.add_argument("--date", help="指定目标周五（YYYY-MM-DD），用于补发或测试")
+    parser.add_argument("--shares", type=float, help="临时覆盖持有份额（试算用，不修改配置）")
+    parser.add_argument("--cost", type=float, help="临时覆盖买入金额（元，试算用）")
     args = parser.parse_args()
 
     if not ENABLE_FUND_NAV_NOTIFY:
@@ -575,9 +746,19 @@ def main() -> int:
         print(f"[info] 状态 {report.status}：{report.note}")
         return 0
 
+    shares, cost_amount = resolve_position(args.shares, args.cost)
+    position = compute_position(report, shares, cost_amount)
+
     print(f"[info] 状态 {report.status}；净值日 {report.nav_date} = {report.nav_value:.6f}；"
-          f"基准日 {report.base_date} = {report.base_value:.6f}；"
+          f"基准日 {report.base_date}（{'周四' if report.base_is_thursday else '顺延'}）= {report.base_value:.6f}；"
           f"涨跌 {report.change_value:+.6f}（{_fmt_pct(report.change_pct)}）")
+    if position.has_shares and position.friday_profit is not None:
+        print(f"[info] 周五当日收益：{position.friday_profit:+,.2f} 元（份额 {shares:,.2f} 份）")
+        if position.total_profit is not None:
+            print(f"[info] 当前市值 {position.market_value:,.2f} 元；"
+                  f"累计收益 {position.total_profit:+,.2f} 元（{position.total_return_pct:+.2f}%）")
+    else:
+        print("[info] 未配置持有份额，邮件将提示填写 FUND_SHARES / FUND_COST_AMOUNT")
     if args.check:
         print("[info] --check 模式，不发送邮件。")
         return 0
@@ -588,8 +769,8 @@ def main() -> int:
         print(f"[info] 周五 {target.isoformat()} 已推送过（{state.get('last_sent_at')}），跳过，避免重复打扰。")
         return 0
 
-    body = build_email_html(report, source_name)
-    subject = build_subject(report)
+    body = build_email_html(report, source_name, position)
+    subject = build_subject(report, position)
 
     if args.dry_run:
         PREVIEW_PATH.write_text(body, encoding="utf-8")
@@ -609,7 +790,7 @@ def main() -> int:
         print("[error] 邮件发送失败，状态文件不更新，下次触发将自动重试。")
         return 1
 
-    record_sent(state, report)
+    record_sent(state, report, position)
     print(f"[ok] 周五净值播报已发送，状态已记录：{STATE_PATH}")
     return 0
 

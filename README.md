@@ -4,7 +4,7 @@
 
 基于 Python + GitHub Actions 的黄金价格自动监控与量化买入分析系统。金价数据来源于**京东金融**黄金价格接口，系统定时获取实时金价并结合多种量化技术指标自动分析买入时机，满足条件时通过邮件发送提醒通知。
 
-此外，项目还包含**基金净值周五播报**：每周五自动抓取徽银理财产品（PNHY230387A）的单位净值，计算相对上一净值日的涨跌幅，并通过同一套 Resend 邮件通道推送。
+此外，项目还包含**基金净值周五播报**：每周六查询上周五徽银理财产品（PNHY230387A）的单位净值，计算相对**周四**的涨跌幅，并结合持仓份额 / 金额直接给出周五收益，通过同一套 Resend 邮件通道推送。
 
 > [!IMPORTANT]
 > 金价监控当前已按需求**停止**：开关位于 `monitor.py` → `ENABLE_GOLD_MONITOR = False`。详见「🔛 金价监控开关」章节；基金净值播报不受该开关影响，独立运行。
@@ -16,7 +16,7 @@
 - 📈 **8分钟高频策略** — 日内级别 Bollinger + RSI + ATR 量化交易信号
 - 💰 **持仓成本追踪** — 止盈/止损/补仓智能提醒
 - 📧 **邮件通知** — 通过 [Resend](https://resend.com) SMTP 发送提醒邮件
-- 📈 **基金净值周五播报** — 每周五推送理财净值相对上一净值日的涨跌幅，含本周明细与近 8 日走势
+- 📈 **基金净值周五播报** — 周六查询周五净值相对周四的涨跌，按持仓直接报出周五收益，含本周明细与近 8 日走势
 - 🔛 **一键启停** — 金价监控由 `monitor.py` 中单个布尔开关控制，随时可恢复
 - 🔁 **GitHub Actions 自动运行** — 零成本云端定时执行
 
@@ -28,13 +28,13 @@
 gold-price-monitor/
 ├── monitor.py               # 金价获取与记录核心脚本（含总开关 ENABLE_GOLD_MONITOR）
 ├── buy_strategy.py          # 多维度技术指标分析与邮件提醒策略
-├── fund_nav_notify.py       # 基金净值周五播报（抓取 / 计算 / HTML 邮件）
+├── fund_nav_notify.py       # 基金净值周六播报（抓取 / 周四基准 / 收益 / HTML 邮件）
 ├── requirements.txt         # 项目依赖库
 ├── .env.example             # 环境变量配置模板
 ├── .github/
 │   └── workflows/
 │       ├── gold_price_monitor.yml   # 金价监控工作流（读取 py 开关决定是否执行）
-│       └── fund_nav_notify.yml      # 基金净值每周五播报工作流
+│       └── fund_nav_notify.yml      # 基金净值播报工作流（周六查询周五数据）
 ├── monitor.log              # 历史金价数据日志（运行时自动生成）
 ├── buy_strategy.log         # 策略分析输出日志（运行时自动生成）
 ├── buy_notify_state.json    # 金价通知状态文件（运行时自动生成）
@@ -58,12 +58,14 @@ gold-price-monitor/
    | `SMTP_PASS` | ✅ | Resend API Key（在 [resend.com](https://resend.com) 注册获取） |
    | `SENDER_EMAIL` | ✅ | 发件人邮箱（需在 Resend 中验证域名，如 `noreply@mail.yourdomain.com`） |
    | `EMAIL_TO` | ✅ | 收件人邮箱（支持逗号分隔多个邮箱） |
+   | `FUND_SHARES` | ⭕ | 基金持有份额（可选，用于计算周五收益；不填则回退到 py 配置区） |
+   | `FUND_COST_AMOUNT` | ⭕ | 基金买入金额 / 本金（可选，用于计算累计收益） |
 
 3. **启用 GitHub Actions**
 
    Fork 后的仓库默认禁用 Actions，进入 **Actions** 标签页点击 **I understand my workflows, go ahead and enable them**。
 
-4. **完成！** 基金净值播报会在每周五（含补发窗口）自动发送；金价工作流仍按原调度触发，但当前开关为关闭状态，会立即退出、不产生任何请求与邮件（如需恢复见下方开关章节）。
+4. **完成！** 基金净值播报会在每周六（含周日 / 周一补发窗口）自动发送；金价工作流仍按原调度触发，但当前开关为关闭状态，会立即退出、不产生任何请求与邮件（如需恢复见下方开关章节）。
 
 > [!TIP]
 > 如果不需要邮件通知，可以不配置任何 Secrets，系统仍会正常采集金价并生成策略分析报告。
@@ -193,11 +195,33 @@ ENABLE_EMAIL_NOTIFICATION = True
 
 ---
 
-## 📈 基金净值周五播报
+## 📈 基金净值周五播报（周六查询）
 
-`fund_nav_notify.py` 每周五把「徽银理财“安盈”稳健最低持有30天理财产品」（代码 `PNHY230387A`）的净值变动发到 `EMAIL_TO`。
+`fund_nav_notify.py` 每周六查询上周五「徽银理财“安盈”稳健最低持有30天理财产品」（代码 `PNHY230387A`）的净值，计算其相对**周四**的涨跌幅，并结合持仓直接给出**周五当日收益（元）**，发送到 `EMAIL_TO`。
 
-**关于「前一天」**：银行理财净值仅在净值公布日更新（工作日，遇节假日顺延），周末与节假日无净值。因此对比基准取**上一个净值公布日**（通常是周四），而非自然日前一天；邮件中会明确写出基准日期与基准净值。
+**为什么周六查、对比周四**：银行理财净值多为 T+1 披露，周五当晚通常查不到周五净值；周六查询可确保拿到周五数据。对比基准固定取同一周的**周四**净值；若周四恰逢节假日无净值公布，则顺延至周五之前最近的净值日，并在邮件中明确标注基准日期。
+
+**持仓配置（用于直接算出周五收益）**：在 `fund_nav_notify.py` 配置区填写：
+
+```python
+FUND_SHARES = 100000.00       # 持有份额（份）
+FUND_COST_AMOUNT = 106000.00  # 买入投入金额（元，本金）
+```
+
+优先级：`--shares` / `--cost` 命令行参数 > 环境变量或 GitHub Secrets > 配置区常量。
+
+> [!WARNING]
+> 直接把金额写进 py 并提交到公开仓库会公开持仓信息。推荐保持常量为 `0.0`，在仓库 **Settings → Secrets** 里新增 `FUND_SHARES` 与 `FUND_COST_AMOUNT`（工作流会自动注入为环境变量）。只填份额即可算出**周五当日收益**；填了本金才额外给出当前市值、累计收益与收益率。
+
+收益口径：
+
+| 指标 | 计算方式 |
+|------|---------|
+| 周五当日收益 | `份额 × (周五单位净值 − 周四单位净值)` |
+| 当前市值 | `份额 × 周五单位净值` |
+| 累计收益 / 收益率 | `当前市值 − 投入本金`，收益率再除以本金 |
+
+邮件主题与正文首屏会直接显示「周五当日收益 ¥xx.xx」，红涨绿跌。
 
 **数据来源**：徽银理财官网 `lccs_income.php?fundCode=PNHY230387A&dateType=all` 全量净值 JSON（与 `lccs_display.php?id=17222` 页面同源）；接口异常时自动降级解析 `lccs_income_list.php` HTML 表格。接口返回的重复日期记录会自动去重。若本地环境缺少根证书导致 SSL 校验失败，脚本会自动降级重试一次，也可设置 `NAV_SKIP_SSL_VERIFY=1` 显式跳过校验。
 
@@ -205,28 +229,29 @@ ENABLE_EMAIL_NOTIFICATION = True
 
 | 北京时间 | 用途 |
 |---------|------|
-| 周五 20:00 / 22:00 | 净值当日已披露则直接推送 |
-| 周六 09:00 / 12:00 | 净值 T+1 披露时补发 |
+| 周六 09:00 / 12:00 / 18:00 | 主触发，此时周五净值已披露 |
+| 周日 10:00 | 披露延迟时补发 |
 | 周一 09:00 | 节假日顺延等极端延迟的兜底 |
 
-脚本每次触发都会自动判断：若目标周五净值尚未公布则跳过、等待下次补发；同一周五只发送一次（`fund_nav_state.json` 防重复）。若该周五本身是非净值日（节假日），则改用当周最后一个净值日并在邮件中注明。
+脚本每次触发都会自动判断：若目标周五净值尚未公布则跳过、等待下次补发；同一周五只发送一次（`fund_nav_state.json` 防重复）。若该周五本身是非净值日（节假日），则改用当周最后一个净值日并在邮件中注明；周四无净值时基准顺延并标注。
 
 **本地调试**：
 
 ```bash
-python fund_nav_notify.py --dry-run                        # 生成报告与 HTML 预览，不发送邮件
-python fund_nav_notify.py --check                          # 只检查净值是否已公布
-python fund_nav_notify.py --date 2026-10-30 --dry-run     # 指定周五补发 / 测试
-python fund_nav_notify.py --force                          # 忽略防重复记录强制发送
+python fund_nav_notify.py --dry-run                                   # 生成报告与 HTML 预览，不发送邮件
+python fund_nav_notify.py --check                                     # 只检查净值是否已公布
+python fund_nav_notify.py --date 2026-10-30 --dry-run                # 指定周五补发 / 测试
+python fund_nav_notify.py --shares 100000 --cost 106000 --dry-run    # 用示例持仓试算收益
+python fund_nav_notify.py --force                                     # 忽略防重复记录强制发送
 ```
 
-> 邮件复用项目已有的 Resend SMTP 配置（`SMTP_PASS` / `SENDER_EMAIL` / `EMAIL_TO`），无需新增 Secrets。涨跌配色遵循国内习惯：**红涨绿跌**。
+> 邮件复用项目已有的 Resend SMTP 配置（`SMTP_PASS` / `SENDER_EMAIL` / `EMAIL_TO`），无需新增邮件 Secrets；持仓为可选 Secrets。涨跌配色遵循国内习惯：**红涨绿跌**。
 
 ---
 
 ## 🛠️ 系统工作流程
 
-> 当前金价链路已由 `ENABLE_GOLD_MONITOR = False` 关闭（下图整条链路跳过）；基金净值播报由独立工作流每周五触发，不受影响。
+> 当前金价链路已由 `ENABLE_GOLD_MONITOR = False` 关闭（下图整条链路跳过）；基金净值播报由独立工作流每周六触发，不受影响。
 
 ```
 GitHub Actions Cron / 手动触发
@@ -255,16 +280,16 @@ GitHub Actions Cron / 手动触发
 基金净值播报（独立工作流 `fund_nav_notify.yml`）：
 
 ```
-周五 20:00/22:00 · 周六补发 · 周一兜底 (Cron)
+周六 09/12/18 点 · 周日补发 · 周一兜底 (Cron)
         │
         ▼
   fund_nav_notify.py ──▶ 官网全量净值 JSON（失败降级 HTML）
         │
         ├─ 目标周五净值未公布 ──▶ 跳过，等待下次触发补发
         │
-        └─ 已公布 ──▶ 计算周五 vs 上一净值日涨跌 ──▶ HTML 报告
-                                                        │
-                                                        ▼
+        └─ 已公布 ──▶ 计算周五 vs 周四涨跌 ──▶ 按份额算周五收益 ──▶ HTML 报告
+                                                                        │
+                                                                        ▼
                                   📧 Resend SMTP 邮件 + fund_nav_state.json 防重复
 ```
 

@@ -1,14 +1,15 @@
 name: fund-nav-notify
 
-# 每周五基金净值播报（独立于金价监控）
+# 每周六查询上周五基金净值并播报（独立于金价监控）
+# 银行理财净值多为 T+1 披露：周五当晚通常查不到周五净值，故以周六为主触发。
 # GitHub Actions 的 cron 使用 UTC，北京时间 = UTC + 8
 on:
   schedule:
-    # 周五北京时间 20:00 / 22:00 —— 净值若当日已披露，此时推送
-    - cron: "0 12,14 * * 5"
-    # 净值多为 T+1 披露：周六北京时间 09:00 / 12:00 补发
-    - cron: "0 1,4 * * 6"
-    # 极端延迟（节假日顺延）：周一北京时间 09:00 再补一次
+    # 周六北京时间 09:00 / 12:00 / 18:00 —— 主触发，此时周五净值已披露
+    - cron: "0 1,4,10 * * 6"
+    # 周日北京时间 10:00 —— 披露延迟时补发
+    - cron: "0 2 * * 0"
+    # 周一北京时间 09:00 —— 节假日顺延等极端延迟的兜底
     - cron: "0 1 * * 1"
   workflow_dispatch: {}
   repository_dispatch:
@@ -42,6 +43,10 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # 持仓配置（可选 Secrets）：未配置时脚本回退到 fund_nav_notify.py 配置区的常量。
+          # 用 Secrets 而非写死在 py 里，可避免持仓份额 / 金额进入公开仓库。
+          FUND_SHARES: ${{ secrets.FUND_SHARES }}
+          FUND_COST_AMOUNT: ${{ secrets.FUND_COST_AMOUNT }}
           # 如官网证书链异常可设为 1 跳过校验（默认 0，脚本会自动降级重试）
           NAV_SKIP_SSL_VERIFY: "0"
         run: python fund_nav_notify.py
