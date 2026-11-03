@@ -2,6 +2,9 @@
 monitor.log
 buy_strategy.log
 
+# 本地 dry-run 生成的基金净值邮件预览（非交付物）
+fund_nav_preview.html
+
 
 # Strategy config (may contain personal thresholds)
 strategy_config.json

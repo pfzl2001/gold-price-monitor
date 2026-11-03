@@ -32,7 +32,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 金价监控开关来自 monitor.py 的 ENABLE_GOLD_MONITOR（唯一控制点）。
+      # 开关为 False 时跳过全部金价步骤：不采集、不分析、不写日志、不发邮件。
+      # 需要恢复监控时，只需把 monitor.py 里的开关改成 True。
+      - name: Read gold monitor switch
+        id: gold_switch
+        run: |
+          if grep -Eq '^ENABLE_GOLD_MONITOR[[:space:]]*=[[:space:]]*True' monitor.py; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "金价监控开关：开启"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "金价监控开关：关闭，跳过金价采集与策略分析"
+          fi
+
       - name: Run monitor (one-shot)
+        if: steps.gold_switch.outputs.enabled == 'true'
         env:
           GOLD_TZ: "Asia/Shanghai"
           GOLD_CODE: "CZB-JCJ"
@@ -41,6 +56,7 @@ jobs:
         run: python monitor.py
 
       - name: Run buy strategy analysis
+        if: steps.gold_switch.outputs.enabled == 'true'
         env:
           GOLD_TZ: "Asia/Shanghai"
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
@@ -53,7 +69,7 @@ jobs:
         run: python buy_strategy.py > buy_strategy.log 2>&1 || true
 
       - name: Show latest price query
-        if: always()
+        if: steps.gold_switch.outputs.enabled == 'true'
         run: |
           echo "📊 最新查询结果:"
           tail -n 1 monitor.log || echo "暂无记录"
@@ -62,7 +78,7 @@ jobs:
           cat buy_strategy.log || echo "暂无 buy_strategy 输出"
 
       - name: Commit and push log
-        if: always()
+        if: steps.gold_switch.outputs.enabled == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"

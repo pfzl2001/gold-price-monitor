@@ -16,6 +16,15 @@ GOLD_PRICE_URL = "https://api.jdjygold.com/gw2/generic/produTools/h5/m/getGoldPr
 DEFAULT_GOLD_CODE = "CZB-JCJ"
 DEFAULT_TZ = "Asia/Shanghai"
 
+# ================= 金价监控总开关（唯一控制点） =================
+# True  = 正常采集金价、写入 monitor.log，并由 buy_strategy.py 执行分析与邮件提醒
+# False = 停止金价监控：不请求接口、不写日志、不分析、不发送任何金价邮件
+#
+# 说明：buy_strategy.py 直接复用本开关，因此只需修改这一处即可控制整套金价监控。
+#       当前为 False（已按需求停止监控）；需要恢复时改成 True 即可。
+ENABLE_GOLD_MONITOR = False
+# ==============================================================
+
 DEFAULT_HEADERS: Dict[str, str] = {
     "accept": "application/json, text/plain, */*",
     "origin": "https://gold-price-pro.pf.jd.com",
@@ -143,6 +152,11 @@ def _append_log_line(text: str) -> None:
 
 
 def main() -> int:
+    # 总开关关闭时立即退出，不产生任何网络请求、日志写入或邮件
+    if not ENABLE_GOLD_MONITOR:
+        print("[info] 金价监控已关闭（monitor.py 中 ENABLE_GOLD_MONITOR = False），跳过本次采集。")
+        return 0
+
     tz_name = os.getenv("GOLD_TZ", DEFAULT_TZ)
     # Schedule check removed - GitHub Actions cron handles timing precisely
     # to save Actions quota. Runs only on Beijing workdays 9:00-23:00.

@@ -29,19 +29,40 @@ from email.mime.multipart import MIMEMultipart
 from email.header import Header
 
 # 复用 monitor.py 的金价获取逻辑
-from monitor import fetch_gold_price, GoldPriceResult, _now_in_timezone, DEFAULT_TZ
+from monitor import (
+    fetch_gold_price,
+    GoldPriceResult,
+    _now_in_timezone,
+    DEFAULT_TZ,
+    ENABLE_GOLD_MONITOR,
+)
 
 # ================= 全局个性化设置 =================
 # 您的实际黄金持仓成本价（元/克），支持浮点数（如 558.5）。如果未买入，请设置为 None 或 0.0
 GOLD_COST = None
 
 # 是否启用邮件通知。如果设为 False，系统将完全不会发送任何提醒邮件
+# （远程已设为 False，保持；该开关仅作用于金价提醒的包装函数，不影响基金播报）
 ENABLE_EMAIL_NOTIFICATION = False
+
+# 金价监控总开关来自 monitor.py 的 ENABLE_GOLD_MONITOR，不在本文件重复定义。
+# 关闭时本脚本会直接退出（不发邮件）；开启时恢复原有策略分析与提醒。
+# 注意：基金净值播报（fund_nav_notify.py）不受此开关影响，独立运行。
 # ==================================================
 
 
-def send_resend_email(subject: str, html_content: str, receiver_email: str = "") -> bool:
-    """通用邮件发送函数（Resend SMTP）"""
+def send_resend_email(
+    subject: str,
+    html_content: str,
+    receiver_email: str = "",
+    *,
+    sender_name: str = "金价监控助手",
+) -> bool:
+    """通用邮件发送函数（Resend SMTP）
+
+    sender_name 仅影响邮件 From 显示名，默认保持原有「金价监控助手」不变，
+    其他脚本（如基金净值播报）可传入自定义名称，复用同一套 SMTP 配置。
+    """
     # 1. 邮件配置，优先使用环境变量，其次使用硬编码默认值
     smtp_host = os.getenv("SMTP_HOST", "smtp.resend.com").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "465").strip())
@@ -56,7 +77,7 @@ def send_resend_email(subject: str, html_content: str, receiver_email: str = "")
     # 2. 构建邮件内容
     msg = MIMEMultipart('alternative')
     msg['Subject'] = Header(subject, 'utf-8')
-    msg['From'] = f"金价监控助手 <{sender_email}>"
+    msg['From'] = f"{sender_name} <{sender_email}>"
     msg['To'] = receiver_email
     
     # 根据内容特征自动决定使用 html 还是 plain
@@ -1916,6 +1937,11 @@ class BuyStrategyAnalyzer:
 
 def main():
     """主函数"""
+    # 金价监控总开关（来自 monitor.py）：关闭时不分析、不发任何金价邮件
+    if not ENABLE_GOLD_MONITOR:
+        print("[info] 金价监控已关闭（monitor.py 中 ENABLE_GOLD_MONITOR = False），跳过策略分析。")
+        return
+
     import argparse
 
     parser = argparse.ArgumentParser(description="金价买入策略分析")
