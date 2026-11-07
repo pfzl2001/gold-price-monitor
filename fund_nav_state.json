@@ -1,0 +1,22 @@
+{
+  "last_sent_friday": "2026-11-06",
+  "last_sent_nav_date": "2026-11-06",
+  "last_sent_nav_value": 1.06952,
+  "last_sent_base_date": "2026-11-05",
+  "last_sent_change_pct": 0.00299208593271098,
+  "last_sent_friday_profit": 2.714827840002715,
+  "last_sent_shares": 84838.37,
+  "last_sent_current_nav": 1.068775,
+  "last_sent_at": "2026-11-07 14:42:28+08:00",
+  "history": [
+    {
+      "friday": "2026-11-06",
+      "nav_date": "2026-11-06",
+      "base_date": "2026-11-05",
+      "nav_value": 1.06952,
+      "change_pct": 0.00299208593271098,
+      "friday_profit": 2.714827840002715,
+      "sent_at": "2026-11-07 14:42:28+08:00"
+    }
+  ]
+}
